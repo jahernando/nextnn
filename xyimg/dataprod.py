@@ -1,7 +1,8 @@
 
 import xyimg.dataprep as dp
+import os
 
-path  = '/scratch/next/data/NEXT100/pressure_topology/'
+path  = os.environ["LPRDATADIR"]
 opath = path+'prod/'
 
 def production(pressures, type, bins, labels, nevents = -1):
