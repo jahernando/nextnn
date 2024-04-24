@@ -4,6 +4,7 @@
 import numpy             as np
 import pandas            as pd
 import random            as random
+import os
 
 from   scipy       import stats
 
@@ -13,8 +14,8 @@ from collections import namedtuple
 
 GoData = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id'])
 
-path = "/scratch/next/data/NEXT100/pressure_topology/"
-path = "/Users/hernando/work/investigacion/NEXT/data/NEXT100/pressure_topology/"
+path   = os.environ['LPRDATADIR']
+#path = "/Users/hernando/work/investigacion/NEXT/data/NEXT100/pressure_topology/"
 
 def voxel_filename(pressure, sample):
     filename = "voxel_dataset_" + pressure + "_" + sample + ".h5"
