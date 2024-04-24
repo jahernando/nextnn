@@ -17,7 +17,6 @@ def production(pressures, type, bins, labels, nevents = -1):
         xyimg.mix_godata(*ofiles, ofile)
     return
 
-
 pressures = ['13bar', '5bar']
 type      = 'levels'
 bins      = (8, 8)
