@@ -4,7 +4,7 @@ import os
 import argparse
 
 path  = os.environ["LPRDATADIR"]
-opath = path+'prod/'
+opath = path+'xyimg/'
 
 def production(pressure, type, bins, labels, nevents = -1):
     ofiles = []

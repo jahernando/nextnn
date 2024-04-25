@@ -14,17 +14,26 @@ from torch.utils.data import DataLoader
 import xyimg.dataprep as dp
 
 #----------------------
-# Data preparation
+#  General
 #----------------------
 
 from collections import namedtuple
 GoCNNBox = namedtuple('GoCNNBox' , ['model', 'dataset', 'epochs', 'index', 'y', 'yp'])
 
 
+
+
 #-------------------
 # data
 #-------------------
 
+def xyimg_filename(type, pressure, sbins):
+    filename = 'xyimg_'+type+'_'+pressure+'_'+sbins+'.npz'
+    return filename
+
+def cnn_filename(type, pressure, sbins, name = 'test'):
+    filename = 'cnn_roc_'+type+'_'+pressure+'_'+sbins+'_'+name
+    return filename
 
 class GoDataset(Dataset):
 
@@ -37,6 +46,7 @@ class GoDataset(Dataset):
         print('Input data ', filename)
         self.filename = filename
         self.labels   = labels
+        print('labels ', labels)
         odata = dp.load(filename)
         self.xs  = _xs(odata.xdic, labels)
         print('x shape ', self.xs.shape)
@@ -57,27 +67,6 @@ class GoDataset(Dataset):
         # if (len(self.labels) == 1): xi.unsqueeze(0) #TODO
         yi = torch.tensor(yi, dtype = torch.float)
         return xi, yi
-
-
-def test_godataset(ifilename):
-
-    odata  = dp.load(ifilename)
-
-    def _test(labels):
-        dataset = GoDataset(ifilename, labels)
-        assert dataset.xs.shape[1] == len(labels)
-        nsize = len(dataset)
-        assert dataset.xs.shape[0] == nsize
-        assert dataset.xs.shape[0] == nsize
-        i = random.choice(range(nsize))
-        for j, label in enumerate(labels):
-            assert np.all(odata.xdic[label][i] == dataset.xs[i, j])
-        assert odata.y[i] == dataset.ys[i]
-    
-    _test(['esum', 'ecount'])
-    _test(['esum',])
-    return True
-
 
 def _index(nsize, fractions):
     index = [int(i*nsize) for i in fractions]
@@ -293,13 +282,36 @@ def roc_value(y, yp, epsilon = 0.9):
     return yp0, seff
 
 def false_positives_indices(y, yp, yp0, index0 = 0):
-    ids = index0 + np.argwhere(np.logical_and( y == 0, yp >= yp0)).flatten()
+    ids = index0 + np.argwhere(np.logical_and(y == 0, yp >= yp0)).flatten()
     return ids
 
 
 #--------
 # Tests
 #---------
+
+def test_godataset(ifilename, labels):
+
+    odata  = dp.load(ifilename)
+
+    def _test(labels):
+        dataset = GoDataset(ifilename, labels)
+        assert dataset.xs.shape[1] == len(labels)
+        nsize = len(dataset)
+        assert dataset.xs.shape[0] == nsize
+        assert dataset.xs.shape[0] == nsize
+        i = random.choice(range(nsize))
+        for j, label in enumerate(labels):
+            assert np.all(odata.xdic[label][i] == dataset.xs[i, j])
+        assert odata.y[i] == dataset.ys[i]
+        assert dataset.zs.shape[0] == nsize
+        assert dataset.zs.shape[1] == len(dataset.zlabels)
+    
+    _test(labels)
+    _test((labels[0],))
+    return True
+
+
 
 def test_box_index(box):
     index = box.index
@@ -321,36 +333,21 @@ def test_box_save(box, ofile):
     return True
 
 
+def test(path):
 
+    type     = 'levels'
+    pressure = '13bar'
+    sbins    = '8x8'
+    labels   = ['esum', 'emax']
 
+    ifilename = path + xyimg_filename(type, pressure, sbins)
+    print('input filename ', ifilename)
+    ofilename = cnn_filename(type, pressure, sbins, 'test')
+    print('output filename ', ofilename)
 
-# def test_load_godata():
+    test_godataset(ifilename, labels)
+    box = run(ifilename, labels, ofilename = ofilename, nepochs = 2)
+    test_box_index(box)
+    test_box_save(box, ofilename+'.npz')
 
-#     pressure = '13bar'
-#     width    = 6
-#     labels   =['esum', 'ecount', 'emean']
-
-#     odata = load_godata(pressure, width, labels)
-
-#     def _test(y):
-#         nsig = np.sum(y == 1)
-#         nbkg = np.sum(y == 0)
-#         assert (nsig >0) & (nbkg > 0)
-
-#     _test(odata.y)
-#     nsize = len(odata.y)
-#     _test(odata.y[0:int(nsize/4)])
-#     _test(odata.y[-int(nsize/4):])
-
-#     for evt in range(min(10, nsize)):
-#         esum   = odata.xdic['esum'][evt]
-#         emean  = odata.xdic['ecount'][evt]
-#         ecount = odata.xdic['emean'][evt]
-#         assert np.all(np.isclose(esum, emean * ecount))
-
-#     for evt in range(min(10, nsize)):
-#         next  = np.sum(odata.zdic['ext'][evt] > 0)
-#         assert (next >= 1) & (next <= 2)
-
-#     return True
-
+    return True
