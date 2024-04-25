@@ -1,5 +1,6 @@
 import random            as random
 import numpy             as np
+import pandas            as pd
 
 import matplotlib.pyplot as plt
 
@@ -10,14 +11,14 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
-import xyimg.datapred as dp
+import xyimg.dataprep as dp
 
 #----------------------
 # Data preparation
 #----------------------
 
 from collections import namedtuple
-GoCNNBox = namedtuple('GoCNNBox' , ['model', 'dataset', 'testdata', 'epochs', 'y', 'ypred'])
+GoCNNBox = namedtuple('GoCNNBox' , ['model', 'dataset', 'epochs', 'index', 'y', 'yp'])
 
 
 #-------------------
@@ -28,17 +29,23 @@ GoCNNBox = namedtuple('GoCNNBox' , ['model', 'dataset', 'testdata', 'epochs', 'y
 class GoDataset(Dataset):
 
     def __init__(self, filename, labels):
+        def _xs(dic, labels):
+            xs = np.array([dic[label] for label in labels])
+            xs = np.swapaxes(xs, 0, 1)
+            return xs
+
         print('Input data ', filename)
         self.filename = filename
         self.labels   = labels
         odata = dp.load(filename)
-        xs = np.array([odata.xdic[label] for label in labels])
-        xs = np.swapaxes(xs, 0, 1)
-        self.xs  = xs
+        self.xs  = _xs(odata.xdic, labels)
         print('x shape ', self.xs.shape)
         self.ys  = odata.y
         print('y shape ', self.ys.shape)
         self.ids = odata.id
+        self.zlabels = list(odata.zdic.keys())
+        self.zs  = _xs(odata.zdic, self.zlabels)
+        print('z shape ', self.zs.shape)
 
     def __len__(self):
         return len(self.ys)
@@ -72,20 +79,25 @@ def test_godataset(ifilename):
     return True
 
 
+def _index(nsize, fractions):
+    index = [int(i*nsize) for i in fractions]
+    index[1] = sum(index)
+    return index
+
 def subsets(dataset, fractions = (0.7, 0.2), batch_size = 200, shuffle = False):
     nsize = len(dataset)
-    index = [int(i*nsize) for i in fractions]
+    index = _index(nsize, fractions)
 
     train_ = torch.utils.data.Subset(dataset, range(0, index[0]))
     train  = DataLoader(train_, batch_size = batch_size, shuffle = shuffle)
 
-    test_  = torch.utils.data.Subset(dataset,range(index[0], index[0] + index[1]) )
+    test_  = torch.utils.data.Subset(dataset,range(index[0], index[1]) )
     test   = DataLoader(test_, batch_size = index[1], shuffle = shuffle)
     
-    val_   = torch.utils.data.Subset(dataset, range(index[0] + index[1], nsize))
+    val_   = torch.utils.data.Subset(dataset, range(index[1], nsize))
     val    = DataLoader(val_, batch_size = batch_size, shuffle = shuffle)
     
-    return train, test, val
+    return train, test, val, index
 
 
 #---------------------
@@ -94,7 +106,7 @@ def subsets(dataset, fractions = (0.7, 0.2), batch_size = 200, shuffle = False):
 
 
 class GoCNN(nn.Module):
-    """ Starts from a (8, 8) image, process 3 convolutional layers and a linear layer to a unique output
+    """ A simple binary classification CNN starting from a (n_width, n_widht, n_depth) 
     """
 
     def __init__(self, n_depth, n_width):
@@ -204,12 +216,6 @@ def prediction(model, test):
             ys_pred = model(xs)
     return ys.numpy(), ys_pred.numpy()
 
-def roc_vals(ys, ys_pred):
-    y0, _  = np.histogram(ys_pred[ys == 0], bins = 100, range = (-1.5, 1.5), density = True) 
-    y1, _  = np.histogram(ys_pred[ys == 1], bins = 100, range = (-1.5, 1.5), density = True) 
-    y0c    = np.cumsum(y0)/np.sum(y0)
-    y1c    = 1. - np.cumsum(y1)/np.sum(y1)
-    return y0c, y1c
 
 #-------------
 # Run
@@ -220,7 +226,7 @@ def run(ifilename, labels, nepochs = 10, ofilename = ''):
     NNType = GoCNN
 
     dataset = GoDataset(ifilename, labels)
-    train, test, val = subsets(dataset)
+    train, test, val, index = subsets(dataset)
     n_depth, n_width, _ = dataset.xs[0].shape
 
     model = NNType(n_depth, n_width)
@@ -231,9 +237,10 @@ def run(ifilename, labels, nepochs = 10, ofilename = ''):
     ys, ysp = prediction(model, test)
 
     if (ofilename != ''):
-        np.savez(ofilename, epochs = epochs, ys = ys, ysp = ysp)
+        print('save cnn results at ', ofilename)
+        np.savez(ofilename, epochs = epochs, index = index, y = ys, yp = ysp)
 
-    return GoCNNBox(model, dataset, test, epochs, ys, ysp)
+    return GoCNNBox(model, dataset, epochs, index, ys, ysp)
 
 #-------------------
 # Plot
@@ -262,9 +269,60 @@ def plot_roc(ys, ysp, zoom = 0.5):
     plt.xlabel('rejection'); plt.ylabel("efficiency"); 
     plt.tight_layout()
 
+#-----------
+# Ana
+#------------
+
+def roc_vals(y, yp):
+    y0, _  = np.histogram(yp[y == 0], bins = 100, range = (-1.5, 1.5), density = True) 
+    y1, _  = np.histogram(yp[y == 1], bins = 100, range = (-1.5, 1.5), density = True) 
+    y0c    = np.cumsum(y0)/np.sum(y0)
+    y1c    = 1. - np.cumsum(y1)/np.sum(y1)
+    return y0c, y1c
+
+def to_df(index, y, yp):
+    ids = np.arange(*index)
+    y   = y.flatten()
+    yp  = yp.flatten()
+    df = pd.DataFrame({'ids':ids, 'y': y, 'yp':yp})
+    return df
+
+def roc_value(y, yp, epsilon = 0.9):
+    yp0   = np.percentile(yp[y==0], 100 * epsilon) 
+    seff  = np.sum(yp[y==1] >= yp0)/len(yp[y==1])
+    return yp0, seff
+
+def false_positives_indices(y, yp, yp0, index0 = 0):
+    ids = index0 + np.argwhere(np.logical_and( y == 0, yp >= yp0)).flatten()
+    return ids
+
+
 #--------
 # Tests
 #---------
+
+def test_box_index(box):
+    index = box.index
+
+    ys  = np.array(box.dataset[index[0]:index[1]][1], dtype = int).flatten()
+    ys0 = box.dataset.ys[index[0]:index[1]].flatten()
+    ys1 = np.array(box.y, dtype = int).flatten()
+    assert np.all(ys == ys0)
+    assert np.all(ys == ys1)
+    return True
+
+def test_box_save(box, ofile):
+    cnndata = np.load(ofile)
+
+    assert np.all(np.array(box.epochs) ==  cnndata['epochs'])
+    assert np.all(box.y == cnndata['y'])
+    assert np.all(box.yp == cnndata['yp'])
+    assert np.all(np.array(box.index) == cnndata['index'])
+    return True
+
+
+
+
 
 # def test_load_godata():
 

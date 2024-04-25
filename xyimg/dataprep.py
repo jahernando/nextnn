@@ -322,9 +322,15 @@ def mix_godata(signal_filename, bkg_filename, ofilename):
 # Plot
 #---------------
 
-def plot_imgs(xdic, ievt, labels = -1):
-    
-    labels = list(xdic.keys()) if labels == -1 else labels
+def plot_imgs(xs, ievt, labels = -1):
+
+    def _img(ki):
+        label = labels[ki]
+        if (isinstance(xs, dict)): 
+            return xs[label][ievt]
+        return xs[ievt][ki]
+
+    labels = list(xs.keys()) if labels == -1 else labels
     n = len(labels)
     m = int(n/4) +  n % 4
     for k in range(m):
@@ -334,7 +340,7 @@ def plot_imgs(xdic, ievt, labels = -1):
             if (ki >= n): break
             plt.subplot(2, 2, i + 1)
             label = labels[ki]
-            plt.imshow(xdic[label][ievt]); 
+            plt.imshow(_img(ki)); 
             plt.title(label); plt.colorbar()
         plt.tight_layout()
     return
