@@ -43,19 +43,23 @@ class GoDataset(Dataset):
             xs = np.swapaxes(xs, 0, 1)
             return xs
 
-        print('Input data ', filename)
         self.filename = filename
         self.labels   = labels
-        print('labels ', labels)
-        odata = dp.load(filename)
-        self.xs  = _xs(odata.xdic, labels)
-        print('x shape ', self.xs.shape)
-        self.ys  = odata.y
-        print('y shape ', self.ys.shape)
-        self.ids = odata.id
-        self.zlabels = list(odata.zdic.keys())
-        self.zs  = _xs(odata.zdic, self.zlabels)
-        print('z shape ', self.zs.shape)
+        odata         = dp.load(filename)
+        self.xs       = _xs(odata.xdic, labels)
+        self.ys       = odata.y
+        self.ids      = odata.id
+        self.zlabels  = list(odata.zdic.keys())
+        self.zs       = _xs(odata.zdic, self.zlabels)
+
+    def __str__(self):
+        s  = 'Dataset : \n'
+        s += '   labels   : ' + str(self.labels)   + '\n'
+        s += '   x shape  : ' + str(self.xs.shape) + '\n'
+        s += '   y shape  : ' + str(self.ys.shape) + '\n'
+        s += '   z labels : ' + str(self.zlabels)  + '\n'
+        s += '   z shape  : ' + str(self.zs.shape) + '\n'
+        return s
 
     def __len__(self):
         return len(self.ys)
@@ -67,6 +71,19 @@ class GoDataset(Dataset):
         # if (len(self.labels) == 1): xi.unsqueeze(0) #TODO
         yi = torch.tensor(yi, dtype = torch.float)
         return xi, yi
+
+class GoDataset3DImg(GoDataset):
+    """ special class for 3D images, that are (x, x, y), and they are converted in (x, y) with x-depth images
+    """
+
+    def __init__(self, filename, labels):
+        super().__init__(filename, labels)
+        assert len(self.labels)   == 1  # only on1 3D image allowed
+        assert len(self.xs.shape) == 5  # checl that there are 3D images
+        xxs     = np.swapaxes(self.xs, 1, 4)
+        self.xs = np.squeeze(xxs, 4)
+        zzs     = np.swapaxes(self.zs, 3, 4)
+        self.zs = np.swapaxes(zzs, 2, 3)
 
 def _index(nsize, fractions):
     index = [int(i*nsize) for i in fractions]
@@ -116,19 +133,23 @@ class GoCNN(nn.Module):
         self.fc1    = nn.Linear(m1, 1)
 
     def forward(self, x):
-        if (self.debug): print(x.size())
+        def _sshape(x):
+            return str(x.size())[11: -1]
+        if (self.debug): s = 'CNN : \n   ' + _sshape(x) 
         x = self.bn1(F.leaky_relu(self.conv1(x)))
-        if (self.debug): print(x.size())
+        if (self.debug): s = s + ' > ' + _sshape(x) 
         x = self.bn2(F.leaky_relu(self.conv2(x)))
-        if (self.debug): print(x.size())
+        if (self.debug): s = s + ' > ' + _sshape(x) 
         x = self.bn3(F.leaky_relu(self.conv3(x)))
-        if (self.debug): print(x.size())
+        if (self.debug): s = s + ' > ' + _sshape(x) 
         x = x.flatten(start_dim=1)
-        if (self.debug): print(x.size())
+        if (self.debug): s = s + ' > ' + _sshape(x) 
         #x = self.drop(x)
         x = self.fc0(x)
-        if (self.debug): print(x.size())
+        if (self.debug): s = s + ' > ' + _sshape(x) + '\n'
         x = self.fc1(x)
+        if (self.debug): s = s + ' > ' + _sshape(x) + '\n'
+        if (self.debug): print(s)
         self.debug = False
         return x
 
@@ -141,6 +162,39 @@ class GoCNN(nn.Module):
 def chi2_loss(ys_pred, ys):
     squared_diffs = (ys_pred - ys) ** 2
     return squared_diffs.mean()
+
+def chi2weight_loss(ys_pred, ys):
+    w0, w1 = 1., 0.5 
+    ydelta = ys_pred - ys
+    ydelta2 = ydelta * ydelta
+    ydelta2[ys == 0] = ydelta2[ys == 0]/w0**2
+    ydelta2[ys == 1] = ydelta2[ys == 1]/w1**2
+    return  ydelta2.mean()
+
+def tstat_loss(ys_pred, ys):
+    ydelta = ys_pred - ys
+    ysig   = 2.*ys - 1.
+    yval   = ydelta * ysig
+    yval2  = yval * yval
+    yval2[yval > 0.] = 1e-6
+    return  yval2.mean()
+
+def tsig_loss(ys_pred, ys):
+    ydelta  = ys_pred - ys
+    yref0   = torch.quantile(ys_pred[ys == 0], 0.5)
+    yref1   = torch.quantile(ys_pred[ys == 1], 0.5)
+    ydelta0 = ys_pred - yref0
+    ydelta1 = ys_pred - yref1
+    ydelta2  = ydelta0
+    ydelta2[ys == 1] = ydelta1[ys == 1]
+    ypm     = 2*ys - 1
+    ysig    = ydelta2 * ypm
+    yval2  = ydelta * ydelta
+    yval2[ysig > 0.] = 1e-6
+    return  yval2.mean()
+
+
+loss_function = chi2_loss
 
 def in_cuda(x):
     if torch.cuda.is_available():
@@ -157,7 +211,7 @@ def _training(model, optimizer, train):
         model.train()
         optimizer.zero_grad()
         ys_pred = model(xs)
-        loss    = chi2_loss(ys_pred, ys)
+        loss    = loss_function(ys_pred, ys)
         loss.backward()
         optimizer.step()
         losses.append(loss.data.item())
@@ -170,7 +224,7 @@ def _validation(model, val):
         for xs, ys in val:
             xs, ys = in_cuda(xs), in_cuda(ys)
             ys_pred = model(xs)
-            loss    = chi2_loss(ys_pred, ys)
+            loss    = loss_function(ys_pred, ys)
             losses.append(loss.data.item())
     return losses
 
@@ -184,7 +238,7 @@ def _epoch(model, optimizer, train, val):
 
     sum =  (_sum(losses_train), _sum(losses_val))
 
-    print('epoch ', sum)
+    print('Epoch:  train {:3.3f} +- {:3.3f}  validation {:3.3f} +- {:3.3f}'.format(*sum[0], *sum[1]))
     return sum 
 
 def train_model(model, optimizer, train, val, nepochs = 20):
@@ -210,18 +264,22 @@ def prediction(model, test):
 # Run
 #-------------
 
-def run(ifilename, labels, nepochs = 10, ofilename = ''):
+def run(ifilename, labels, nepochs = 10, ofilename = '', is3D = False):
 
     NNType = GoCNN
+    Dset   = GoDataset3DImg if is3D == True else GoDataset
 
-    dataset = GoDataset(ifilename, labels)
+    dataset = Dset(ifilename, labels)
+    print(dataset)
+
     train, test, val, index = subsets(dataset)
     n_depth, n_width, _ = dataset.xs[0].shape
 
-    model = NNType(n_depth, n_width)
-    model = in_cuda(model)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    epochs = train_model(model, optimizer, train, val, nepochs = nepochs)
+    model     = NNType(n_depth, n_width)
+    model     = in_cuda(model)
+    learning_rate = 0.001 # default (tested 0.01, 0.0001 with no improvements)
+    optimizer = optim.Adam(model.parameters(), lr = learning_rate)
+    epochs    = train_model(model, optimizer, train, val, nepochs = nepochs)
 
     ys, ysp = prediction(model, test)
 

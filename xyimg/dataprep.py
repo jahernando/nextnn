@@ -499,8 +499,9 @@ def test_mix_godata(ifilename1, ifilename2, ofilename):
 
     _test(odata.y)
     nsize = len(odata.y)
-    _test(odata.y[0:int(nsize/4)])
-    _test(odata.y[-int(nsize/4):])
+    ni = int(nsize/2)
+    _test(odata.y[0  : ni])
+    _test(odata.y[ni :   ])
 
     for evt in range(min(10, nsize)):
         esum   = odata.xdic['esum'][evt]
