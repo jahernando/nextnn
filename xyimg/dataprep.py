@@ -12,7 +12,18 @@ import matplotlib.pyplot as plt
 
 from collections import namedtuple
 
-GoData = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id'])
+"""
+GoData is the data prepared for the NN
+contains:
+    xdic : a dictionary with the images 
+    zdic : a dictionary with the true images (extremes and segmentation (0-track, 1-other, 2-blob))
+    y    : the target (0-bkg, 1-signal)
+    id   : id of the event (file, event-number)
+    xf   : np.array with relative physical information (delta-x, delta-yy, delta-z (mm), fraction of E) of the main track
+    zf   : np.array with absolute physical information (x0, y0, z0 (mm), E-track (MeV)) of the main track
+data is saved in a npz file where the dictionaries are stored as values (x, z) and labels (xlabel, zlabel)
+"""
+GoData = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id', 'xf', 'zf'])
 
 path   = os.environ['LPRDATADIR']
 #path = "/Users/hernando/work/investigacion/NEXT/data/NEXT100/pressure_topology/"
@@ -41,6 +52,27 @@ def _data(evt):
     es         = normarange(evt.E)
     data       = {'x':xs, 'y': ys, 'z':zs, 'e':es}
     return data
+
+def _track_eframe(evt):
+    etot  = np.sum(evt.E)
+    sel   = evt.track_id <= 1
+    etrk  = np.sum(evt[sel].E)
+    return etrk/etot, etrk
+
+def _track_xyzframe(evt):
+
+    sel   = evt.track_id <= 1
+    x0s   = np.array([np.min(x) for x in (evt[sel].x, evt[sel].y, evt[sel].z)])
+    x1s   = np.array([np.max(x) for x in (evt[sel].x, evt[sel].y, evt[sel].z)])
+    dxs   = x1s - x0s
+    return dxs, x0s
+
+def _track_frame(evt):
+    fe , etrk = _track_eframe(evt)
+    dxs, x0s  = _track_xyzframe(evt)
+    xf = np.array(list(dxs) + list((fe,)))
+    zf = np.array(list(x0s) + list((etrk,)))
+    return xf, zf
 
 def _coors(data, coorsnames):
     coors      = tuple(data[c] for c in coorsnames)
@@ -134,46 +166,6 @@ _algorithm = {'levels'      : xyimg_levels,
               'z'           : xyimg_z,
               'projections' : xyimg_projections}
 
-# def get_func_event_xyimg(bins, coorsnames, labels, track_id = 0):
-
-#     def _data(evt):
-#         xs, ys, zs = [urange(x) for x in [evt.x, evt.y, evt.z]]
-#         es         = normarange(evt.E)
-#         data       = {'x':xs, 'y': ys, 'z':zs, 'e':es}
-#         coors      = tuple(data[c] for c in coorsnames)
-#         return coors, data
-
-#     def _xyimg(coors, data, label):
-#         varname      = label[0]
-#         statistics   = label[1:]
-#         #print('label ', label, ', varname', varname, ', statistics ', statistics)
-#         var          = data[varname]
-#         xyimg , _, _ = stats.binned_statistic_dd(coors, var,  bins = bins, statistic = statistics)
-#         xyimg        = np.nan_to_num(xyimg, 0) 
-#         return xyimg
-
-#     def _true_xyimgs(coors, event):
-#         _seg = np.array([2, 1, 3])
-#         seg = [_seg[x] for x in event.segclass.values]
-#         ext = event.ext.values > 0
-#         text, _, _ = stats.binned_statistic_dd(coors, ext,  bins = bins, statistic = 'max')
-#         tseg, _, _ = stats.binned_statistic_dd(coors, seg,  bins = bins, statistic = 'max')
-#         timgs = [np.nan_to_num(img, 0).astype(int) for img in (text, tseg)]
-#         return timgs
-
-#     def get_event_xyimg(event):
-
-#         sel = event.track_id <= track_id
-#         coors, data = _data(event[sel])
-
-#         xs = [_xyimg(coors, data, label) for label in labels]
-#         ys = event.binclass.unique()
-#         zs = _true_xyimgs(coors, event[sel])
-
-#         return (xs, ys, zs)
-
-#     return get_event_xyimg
-
 
 #----------
 #   Run
@@ -212,9 +204,10 @@ def run(ifilename,
     def _dappend(dic, vals):
         for i, label in enumerate(dic.keys()): dic[label].append(vals[i])
 
-    xdic  = _dinit(_xlabels(xyimg_type, labels))
-    zdic  = _dinit(_zlabels(xyimg_type))
-    y, id = [], []
+    xdic   = _dinit(_xlabels(xyimg_type, labels)) # images
+    zdic   = _dinit(_zlabels(xyimg_type)) # true images
+    y , id = [], [] # target, id
+    xf, zf = [], [] # frame
 
     for i, (evtid, evt) in enumerate(idata.groupby(['file_id', 'event'])):
         if ((nevents >= 1) & (i >= nevents)): break
@@ -222,12 +215,15 @@ def run(ifilename,
         file_id    = int(evt.file_id.unique())
         event_id   = int(evt.event.unique())
         idi        = np.array((file_id, event_id))
+        xfi, zfi   = _track_frame(evt)
         _dappend(xdic, xi)
         _dappend(zdic, zi)
         y.append(yi)
         id.append(idi)
+        xf.append(xfi)
+        zf.append(zfi)
 
-    odata = GoData(xdic, y, zdic, id)
+    odata = GoData(xdic, y, zdic, id, xf, zf)
 
     save(odata, ofilename)
 
@@ -245,8 +241,11 @@ def save(odata, ofilename):
     zlabel = list(odata.zdic.keys())
     z = np.array([np.array(odata.zdic[label]) for label in zlabel])
     id = np.array(odata.id)
-    np.savez(ofilename, x = x, y = y, z = z, id = id, 
-             xlabel = np.array(xlabel), zlabel = np.array(zlabel))
+    xf = np.array(odata.xf)
+    zf = np.array(odata.zf)
+    np.savez_compressed(ofilename, x = x, y = y, z = z, id = id,
+             xlabel = np.array(xlabel), zlabel = np.array(zlabel),
+             xf = xf, zf = zf)
     return
 
 def load(ifilename):
@@ -260,7 +259,10 @@ def load(ifilename):
     zdic = {}
     for i, label in enumerate(zlabel): zdic[label] = z[i]
 
-    odata = GoData(xdic, y, zdic, id)
+    xf = data['xf']
+    zf = data['zf']
+
+    odata = GoData(xdic, y, zdic, id,xf, zf)
     return odata
 
 #-----------
@@ -288,6 +290,8 @@ def mix_godata(signal_filename, bkg_filename, ofilename):
     #print('x labels ', xlabel)
     #print('z labels ', zlabel)
     id0, id1 = data0['id'], data1['id']
+    xf1, xf2 = data0['xf'], data1['xf']
+    zf1, zf2 = data0['zf'], data1['zf']
 
     def _list(a, b):
         return list(a) + list(b)
@@ -301,19 +305,23 @@ def mix_godata(signal_filename, bkg_filename, ofilename):
     ys  = _list(y0, y1)
     zs  = _list(z0, z1)
     ids = _list(id0, id1)
+    xfs = _list(xf1, xf2)
+    zfs = _list(zf1, zf2)
 
-    ww = list(zip(xs, ys, zs, ids))
+    ww = list(zip(xs, ys, zs, ids, xfs, zfs))
     random.shuffle(ww)
 
     xs  = np.array([wi[0] for wi in ww])
     ys  = np.array([wi[1] for wi in ww])
     zs  = np.array([wi[2] for wi in ww])
     ids = np.array([wi[3] for wi in ww])
+    xfs = np.array([wi[4] for wi in ww])
+    zfs = np.array([wi[5] for wi in ww])
 
     xs = _dic(_swap(xs), xlabel)
     zs = _dic(_swap(zs), zlabel)
 
-    odata = GoData(xs, ys, zs, ids)
+    odata = GoData(xs, ys, zs, ids, xfs, zfs)
     save(odata, ofilename)
     return odata
 
@@ -373,6 +381,16 @@ def test_normarange(x):
     assert np.isclose(ux[iar], x[iar]/sum)
     iar  = np.argmin(x)
     assert np.isclose(ux[iar], x[iar]/sum)
+    return True
+
+def test_track_frame(ifilename):
+    print('Input voxel file:', ifilename)
+    idata        = pd.read_hdf(ifilename, "voxels") 
+    for i, (_, evt) in enumerate(idata.groupby(['file_id', 'event'])):
+        if (i >= 5): break
+        xf, zf = _track_frame(evt)
+        assert np.all(xf > 0)
+        assert zf[-1] > 0
     return True
 
 def test_xyimg_levels(ifilename):
