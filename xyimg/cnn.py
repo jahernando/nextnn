@@ -21,8 +21,6 @@ from collections import namedtuple
 GoCNNBox = namedtuple('GoCNNBox' , ['model', 'dataset', 'epochs', 'index', 'y', 'yp'])
 
 
-
-
 #-------------------
 # data
 #-------------------
@@ -264,15 +262,13 @@ def prediction(model, test):
 # Run
 #-------------
 
-def run(ifilename, labels, nepochs = 10, ofilename = '', is3D = False):
+def run(dataset, nepochs = 10, ofilename = ''):
 
     NNType = GoCNN
-    Dset   = GoDataset3DImg if is3D == True else GoDataset
-
-    dataset = Dset(ifilename, labels)
     print(dataset)
 
     train, test, val, index = subsets(dataset)
+    assert len(dataset.xs.shape) == 4
     n_depth, n_width, _ = dataset.xs[0].shape
 
     model     = NNType(n_depth, n_width)
@@ -404,8 +400,25 @@ def test(path):
     print('output filename ', ofilename)
 
     test_godataset(ifilename, labels)
-    box = run(ifilename, labels, ofilename = ofilename, nepochs = 2)
+    dset = GoDataset(ifilename, labels)
+    box = run(dset, ofilename = ofilename, nepochs = 2)
     test_box_index(box)
     test_box_save(box, ofilename+'.npz')
+
+    type     = 'z'
+    pressure = '13bar'
+    sbins    = '8x8x4'
+    labels   = ['esum']
+    ifilename = path + xyimg_filename(type, pressure, sbins)
+    print('input filename ', ifilename)
+    ofilename = cnn_filename(type, pressure, sbins, 'test')
+    print('output filename ', ofilename)
+
+    #test_godataset(ifilename, labels)
+    dset = GoDataset3DImg(ifilename, labels)
+    box = run(dset, ofilename = ofilename, nepochs = 2)
+    test_box_index(box)
+    test_box_save(box, ofilename+'.npz')
+
 
     return True

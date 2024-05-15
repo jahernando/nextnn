@@ -8,11 +8,14 @@ opath = path+'cnn/'
 
 def production(pressure, type, sbins, labels, name = ''):
 
-    ifile  = ipath + cnn.xyimg_filename(type, pressure, sbins)
-    ofile  = opath + cnn.cnn_filename(type, pressure, sbins, name)
-    box    = cnn.run(ifile, labels, ofilename = ofile)
+    ifile   = ipath + cnn.xyimg_filename(type, pressure, sbins)
+    ofile   = opath + cnn.cnn_filename(type, pressure, sbins, name)
+    Dset    = cnn.GoDataset3DImg if type == 'z' else cnn.GoDataset  
+    dataset = Dset(ifile, labels)
+    box    = cnn.run(dataset, ofilename = ofile)
     print('efficiency {:2.1f}% at 80% rejection'.format(100.*cnn.roc_value(box.y, box.yp, 0.8)[1]))
     return box
+
 
 type     = 'levels'
 pressure = '13bar' 
@@ -31,5 +34,9 @@ args = parser.parse_args()
 
 print('path', path)
 print('args', args)
-box = production(pressure = args.pressure, type = args.type, sbins = args.sbins, labels = args.labels, name = args.name);
+box = production(pressure = args.pressure, 
+                 type      = args.type, 
+                 sbins     = args.sbins, 
+                 labels    = args.labels, 
+                 name      = args.name);
 print('Done!')

@@ -17,8 +17,8 @@ def production(pressure, type, bins, labels, nevents = -1):
         ofiles.append(ofile+'.npz')
         dp.run(ifile, ofile, xyimg_type = type, bins = bins, labels = labels, nevents = nevents)
         ofile = opath+'xyimg_'+type+'_'+str(pressure)+'_'+sbin
-        dp.mix_godata(*ofiles, ofile)
-        for ofile in ofiles: os.remove(ofile)
+    dp.mix_godata(*ofiles, ofile)
+    for ofile in ofiles: os.remove(ofile)
     return True
 
 bins   = (8, 8)
