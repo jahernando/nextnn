@@ -215,7 +215,7 @@ def run(ifilename,
     
     delta  = np.max(get_frame(idata))
     print('maximum window frame {:4.2f}'.format(delta))
-    if (delta >= frame):
+    if (delta > frame):
         print('Error: Unsificient frame width', frame, ', must be ', delta)
         assert delta <= frame
 
