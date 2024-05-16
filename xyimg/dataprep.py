@@ -221,8 +221,8 @@ def run(ifilename,
 
     bins   = [arange_include_endpoint(0, frame, width) for width in widths]
     if (verbose):
-        print('image shape in bins ', [len(b) for b in bins])
-        
+        print('image shape in bins ', [len(b)-1 for b in bins])
+
     def _dinit(labels):
         xdic = {}
         for label in labels: xdic[label] = []
