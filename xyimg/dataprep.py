@@ -12,8 +12,9 @@ import matplotlib.pyplot as plt
 
 from collections import namedtuple
 
+
 #-------------
-#   Data
+#   CNN Input Data (Images)
 #------------
 
 """
@@ -28,6 +29,8 @@ contains:
 data is saved in a npz file where the dictionaries are stored as values (x, z) and labels (xlabel, zlabel)
 """
 GoData = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id'])
+
+frames = {'13bar' : 100, '5bar' : 304, '2bar' : 587, '1bar' : 593}
 
 def save(odata, ofilename):
     # print('Output file : ', ofilename)
@@ -58,15 +61,54 @@ def load(ifilename):
     return odata
 
 
+#---------------------
+#  Input Output files
+#---------------------
+
+
+def voxel_filename(pressure, sample, prefix = 'voxel_dataset', ext = '.h5'):
+    """ return the voxel filename
+    inputs:
+        pressure: '13bar', '5bar', '2bar', '1bar'
+        sample  : '1eroi', '0nubb'
+        prefix  : default 'voxel_dataset'
+        ext     : default '.h5'
+    """
+    filename = str_concatenate((prefix, pressure, sample)) + ext
+    return filename
+
+
+def xymm_filename(projection, widths, frame, prefix = 'xymm', ext = '.npz'):
+    """ return the xymm images filename
+    inputs:
+        projection : ('x', 'y'), ('x', 'y', 'z')
+        widths     : i.e (5, 5) (only integers)
+        frame      : 100 (int)
+        prefix     : default 'xymm'
+        ext        : default '.npz'
+    """
+    sproj   = str_concatenate(projection, '')
+    swidths = str_concatenate([str(int(w)) for w in widths], 'x')
+    ofile   = str_concatenate((prefix, sproj, swidths, int(frame)), '_') + ext
+    return ofile
+
+def prepend_filename(ifilename, name , link = '_'):
+    words = ifilename.split('/')
+    fname = words[-1]
+    ofname = str_concatenate((name, fname), link)
+    ofname = str_concatenate(words[:-1], '/') + '/'+ofname
+    return ofname
+
 #---------------
 # Utils
 #----------------
 
-def voxel_filename(pressure, sample):
-    """ return the voxel filename
-    """
-    filename = "voxel_dataset_" + pressure + "_" + sample + ".h5"
-    return filename
+def str_concatenate(words, link = '_'):
+    ss = ''
+    for w in words: ss += str(w) + link
+    nn = len(link)
+    if nn == 0: return ss 
+    return ss[:-nn]
 
 def urange(var : np.array) -> np.array:
     """ set the variable in the range [0, 1]
@@ -88,25 +130,12 @@ def uframecentered(var, width):
     ovar = var - vmin + v0   
     return ovar
 
-# def _track_eframe(evt):
-#     etot  = np.sum(evt.E)
-#     sel   = evt.track_id <= 1
-#     etrk  = np.sum(evt[sel].E)
-#     return etrk/etot, etrk
-
-# def _track_xyzframe(evt):
-#     sel   = evt.track_id <= 1
-#     x0s   = np.array([np.min(x) for x in (evt[sel].x, evt[sel].y, evt[sel].z)])
-#     x1s   = np.array([np.max(x) for x in (evt[sel].x, evt[sel].y, evt[sel].z)])
-#     dxs   = x1s - x0s
-#     return dxs, x0s
-
-# def _track_frame(evt):
-#     fe , etrk = _track_eframe(evt)
-#     dxs, x0s  = _track_xyzframe(evt)
-#     xf = np.array(list(dxs) + list((fe,)))
-#     zf = np.array(list(x0s) + list((etrk,)))
-#     return xf, zf
+def arange_include_endpoint(start, stop, step):
+    u = np.arange(start, stop, step)
+    uu = list(u)
+    if (uu[-1] < stop): 
+        uu.append(uu[-1] + step)
+    return np.array(uu)
 
 
 def image(coors, data, varname, statistics, bins):
@@ -116,40 +145,6 @@ def image(coors, data, varname, statistics, bins):
     xyimg , _, _ = stats.binned_statistic_dd(coors, var,  bins = bins, statistic = statistics)
     xyimg        = np.nan_to_num(xyimg, 0) 
     return xyimg
-
-#-------------
-# Algorithms
-#-------------
-
-
-# def xyimg_projections(bins, labels, _data):
-#     """ creates 3 projections (x, y), (x, z) and (z, y) 
-#     each projection contains the images of labels, i,e label = 'esum'
-#     """
-
-#     def _func(event):
-
-#         sel = event.track_id <= track_id
-#         data    = _data(event[sel])
-#         xycoors = _coors(data, ('x', 'y'))
-#         xzcoors = _coors(data, ('x', 'z'))
-#         zycoors = _coors(data, ('z', 'y'))
-
-#         xs, zs = [], []
-#         for coors in (xycoors, xzcoors, zycoors):
-#             xs += [_xyimg(coors, data, label, bins) for label in labels]
-#             zs += _true_xyimgs(coors, event[sel], bins)
-
-#         ys = event[sel].binclass.unique()
-
-#         return (xs, ys, zs)
-    
-#     return _func
-
-
-# _algorithm = {'levels'      : xyimg_levels,
-#               'z'           : xyimg_z,
-#               'projections' : xyimg_projections}
 
 
 #--------------
@@ -166,24 +161,10 @@ def get_frame(idata):
     dx, dy, dz  = np.max(delta.x), np.max(delta.y), np.max(delta.z)
     return dx, dy, dz
 
-def arange_include_endpoint(start, stop, step):
-    u = np.arange(start, stop, step)
-    uu = list(u)
-    if (uu[-1] < stop): 
-        uu.append(uu[-1] + step)
-    return np.array(uu)
 
 #----------
 #   Run
 #----------
-
-def _ofile(ofile, projection, widths, frame):
-    ss = '';
-    for si in projection: ss += si
-    windows = ''
-    for xi in widths: windows += str(int(xi))+'x'
-    windows = windows[:-1] 
-    return ofile+'_'+ss+'_'+windows+'_'+str(int(frame))
 
 
 def run(ifilename,
@@ -195,14 +176,14 @@ def run(ifilename,
         nevents    = -1, 
         verbose    = True):
 
-
-
+    ofilename = xymm_filename(projection, widths, frame, prefix = ofilename)
+    
     if (verbose):
         print('input  filename ', ifilename)
         print('output filename ', ofilename)
-        print('projections     ', projection)
-        print('widths          ', widths)
-        print('frame           ', frame)
+        print('projection      ', projection)
+        print('widths     (mm) ', widths)
+        print('frame      (mm) ', frame)
         print('labels          ', labels)
         print('events          ', nevents)
 
@@ -214,9 +195,9 @@ def run(ifilename,
     idata   = pd.read_hdf(ifilename, "voxels") 
     
     delta  = np.max(get_frame(idata))
-    print('maximum window frame {:4.2f}'.format(delta))
+    print('maximum window frame {:4.2f} mm'.format(delta))
     if (delta > frame):
-        print('Error: Unsificient frame width', frame, ', must be ', delta)
+        print('Error: Unsificient frame width', frame, ', must be ', delta, 'mm')
         assert delta <= frame
 
     bins   = [arange_include_endpoint(0, frame, width) for width in widths]
@@ -269,17 +250,16 @@ def run(ifilename,
 
     odata = GoData(xdic, y, zdic, id)
 
-    ofile = _ofile(ofilename, projection, widths, frame)
-    if (verbose):
-        print('output file ', ofile)
-
+    ofile = ofilename.split('.')[0]
     save(odata, ofile)
+    if verbose:
+        print('saved output file ', ofile+'.npz')
 
     return odata
 
 
 #-----------
-# Mix
+# Mix samples
 #------------
 
 def mix_godata(signal_filename, bkg_filename, ofilename):
@@ -336,6 +316,7 @@ def mix_godata(signal_filename, bkg_filename, ofilename):
 
     odata = GoData(xs, ys, zs, ids)
     save(odata, ofilename)
+    print('output file  ', ofilename+'.npz')
     return odata
 
 
@@ -369,6 +350,8 @@ def plot_imgs(xs, ievt, labels = -1):
     return
 
 
+#--------------------------------------------------------
+
 
 #--------------
 # Tests
@@ -396,6 +379,26 @@ def test_voxel_filename(pressure, sample):
     assert filename == "voxel_dataset_" + pressure + "_" + sample + ".h5"
     return True
 
+def test_xymm_filename(projection, widths, frame, prefix = 'xymm'):
+    sproj  = str_concatenate(projection, '')
+    swidth = str_concatenate([int(w) for w in widths], 'x')
+    ofile0 = xymm_filename(projection, widths, frame, prefix)
+    ofile1 = str_concatenate((prefix, sproj, swidth, frame))+'.npz'
+    assert ofile0 == ofile1
+    return True
+
+def test_str_concatenate():
+    words = ('x', 'y')
+    ss    = str_concatenate(words, '')
+    assert len(ss) == sum([len(x) for x in words])
+    words = np.arange(10)
+    ss    = str_concatenate(words, '_')
+    assert len(ss.split('_')) == len(words)
+    words = ('a', 'b', 'c')
+    ss    = str_concatenate(words, 'x')
+    assert len(ss.split('x')) == len(words)
+    return True
+
 def test_urange(x):
     uz = urange(x)
     assert (np.min(uz) >= 0) & (np.max(uz) <= 1)
@@ -419,6 +422,7 @@ def test_arange_include_endpoint(start, stop, step):
     assert u[-2] <  stop
     return True
 
+#------------
 
 def test_frame(ifilename):
     idata   = pd.read_hdf(ifilename, "voxels") 
@@ -435,7 +439,8 @@ def test_frame(ifilename):
 def test_run(ifilename, ofilename, coors, widths, frame):
     labels = ['esum', 'ecount', 'emean']
     odata  = run(ifilename, ofilename, coors, widths, frame, labels , nevents= 10)
-    xdata  = load(_ofile(ofilename, coors, widths, frame)+'.npz')
+    ofile  = xymm_filename(coors, widths, frame, ofilename)
+    xdata  = load(ofile)
 
     assert np.all(xdata.y  == odata.y)
     assert np.all(xdata.id == odata.id)
@@ -451,46 +456,6 @@ def test_run(ifilename, ofilename, coors, widths, frame):
         assert np.all(np.isclose(esum, emean * ecount))
     return True
 
-# def test_run_xyimg_projections(ifilename, ofilename = 'temp'):
-#     bins  = (8, 8) 
-#     odata = run(ifilename, ofilename, xyimg_type = 'projections', bins = bins, nevents= 10)
-#     xdata = load(ofilename+'.npz')
-
-#     assert np.all(xdata.y == odata.y)
-#     assert np.all(xdata.id == odata.id)
-#     for label in xdata.xdic.keys():
-#         assert np.all(xdata.xdic[label] == odata.xdic[label])
-#     for label in xdata.zdic.keys():
-#         assert np.all(xdata.zdic[label] == odata.zdic[label])
-
-#     for evt in range(10):
-#         for proj in ('xy', 'xz', 'zy'):
-#             esum   = odata.xdic[proj+'_esum'][evt]
-#             emean  = odata.xdic[proj+'_ecount'][evt]
-#             ecount = odata.xdic[proj+'_emean'][evt]
-#             assert np.all(np.isclose(esum, emean * ecount))
-
-#     return True
-
-# def test_run_xyimg_z(ifilename, ofilename = 'temp'):
-
-#     bins  = (8, 8, 4) 
-#     odata = run(ifilename, ofilename, xyimg_type = 'z', bins = bins, nevents= 10)
-#     xdata = load(ofilename+'.npz')
-
-#     assert np.all(xdata.y == odata.y)
-#     assert np.all(xdata.id == odata.id)
-#     for label in xdata.xdic.keys():
-#         assert np.all(xdata.xdic[label] == odata.xdic[label])
-#     for label in xdata.zdic.keys():
-#         assert np.all(xdata.zdic[label] == odata.zdic[label])
-
-#     for evt in range(10):
-#         esum   = odata.xdic['esum'][evt]
-#         emean  = odata.xdic['ecount'][evt]
-#         ecount = odata.xdic['emean'][evt]
-#         assert np.all(np.isclose(esum, emean * ecount))
-#     return True
 
 def test_mix_godata(ifilename1, ifilename2, ofilename):
 
@@ -520,13 +485,20 @@ def test_mix_godata(ifilename1, ifilename2, ofilename):
     return True
 
 
-path   = os.environ['LPRDATADIR']
+def tests(path):
 
-def tests(path = path, pressure = '13bar'):
+    pressure = '13bar'
     sample1  = '0nubb'
     sample2  = '1eroi'
     
+    coords   = ('x', 'y')
+    widths   = (10, 10)
+    frame    = 100
+
+    test_str_concatenate()
     test_voxel_filename(pressure, sample1)
+    test_xymm_filename(coords, widths, frame)
+
     test_godata()
     test_urange(np.arange(30))
     test_arange_include_endpoint(0, 10, 0.3)

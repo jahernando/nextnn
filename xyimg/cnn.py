@@ -25,13 +25,6 @@ GoCNNBox = namedtuple('GoCNNBox' , ['model', 'dataset', 'epochs', 'index', 'y', 
 # data
 #-------------------
 
-def xyimg_filename(type, pressure, sbins):
-    filename = 'xyimg_'+type+'_'+pressure+'_'+sbins+'.npz'
-    return filename
-
-def cnn_filename(type, pressure, sbins, name = 'test'):
-    filename = 'cnn_roc_'+type+'_'+pressure+'_'+sbins+'_'+name
-    return filename
 
 class GoDataset(Dataset):
 
@@ -102,6 +95,12 @@ def subsets(dataset, fractions = (0.7, 0.2), batch_size = 200, shuffle = False):
     val    = DataLoader(val_, batch_size = batch_size, shuffle = shuffle)
     
     return train, test, val, index
+
+def full_sample(dataset):
+    nsize = len(dataset)
+    sample_ = torch.utils.data.Subset(dataset, range(0, nsize))
+    sample  = DataLoader(sample_, batch_size = 1, shuffle = False)
+    return sample
 
 
 #---------------------
@@ -262,6 +261,7 @@ def prediction(model, test):
 # Run
 #-------------
 
+
 def run(dataset, nepochs = 10, ofilename = ''):
 
     NNType = GoCNN
@@ -270,6 +270,7 @@ def run(dataset, nepochs = 10, ofilename = ''):
     train, test, val, index = subsets(dataset)
     assert len(dataset.xs.shape) == 4
     n_depth, n_width, _ = dataset.xs[0].shape
+    print('Event Image tensor ', dataset.xs[0].shape)
 
     model     = NNType(n_depth, n_width)
     model     = in_cuda(model)
@@ -277,13 +278,16 @@ def run(dataset, nepochs = 10, ofilename = ''):
     optimizer = optim.Adam(model.parameters(), lr = learning_rate)
     epochs    = train_model(model, optimizer, train, val, nepochs = nepochs)
 
-    ys, ysp = prediction(model, test)
+    ys, yps = prediction(model, test)
+    ybin    =  yps >= 0.5
+    acc = 100.*np.sum(ys == ybin)/len(ys)
+    print('Test  accuracy {:4.2f}'.format(acc))
 
     if (ofilename != ''):
         print('save cnn results at ', ofilename)
-        np.savez(ofilename, epochs = epochs, index = index, y = ys, yp = ysp)
+        np.savez(ofilename, epochs = epochs, index = index, y = ys, yp = yps)
 
-    return GoCNNBox(model, dataset, epochs, index, ys, ysp)
+    return GoCNNBox(model, dataset, epochs, index, ys, yps)
 
 #-------------------
 # Plot
@@ -387,38 +391,28 @@ def test_box_save(box, ofile):
     return True
 
 
-def test(path):
+def test(ifilename):
 
-    type     = 'levels'
-    pressure = '13bar'
-    sbins    = '8x8'
-    labels   = ['esum', 'emax']
-
-    ifilename = path + xyimg_filename(type, pressure, sbins)
     print('input filename ', ifilename)
-    ofilename = cnn_filename(type, pressure, sbins, 'test')
+    ofilename = dp.prepend_filename(ifilename, 'test_cnn')
     print('output filename ', ofilename)
 
+    labels = ['esum', 'emax', 'ecount']
     test_godataset(ifilename, labels)
     dset = GoDataset(ifilename, labels)
-    box = run(dset, ofilename = ofilename, nepochs = 2)
+    box = run(dset, ofilename = ofilename, nepochs = 4)
     test_box_index(box)
-    test_box_save(box, ofilename+'.npz')
+    test_box_save(box, ofilename)
 
-    type     = 'z'
-    pressure = '13bar'
-    sbins    = '8x8x4'
-    labels   = ['esum']
-    ifilename = path + xyimg_filename(type, pressure, sbins)
-    print('input filename ', ifilename)
-    ofilename = cnn_filename(type, pressure, sbins, 'test')
-    print('output filename ', ofilename)
-
-    #test_godataset(ifilename, labels)
-    dset = GoDataset3DImg(ifilename, labels)
-    box = run(dset, ofilename = ofilename, nepochs = 2)
-    test_box_index(box)
-    test_box_save(box, ofilename+'.npz')
-
+#    print('input filename ', ifilename_xyz)
+#    ofilename = dp.prepend_filename(ifilename_xyz, 'test_cnn')
+#    print('output filename ', ofilename)
+#
+#    #test_godataset(ifilename, labels)
+#    labels = ['esum',]
+#    dset   = GoDataset3DImg(ifilename, labels)
+#    box    = run(dset, ofilename = ofilename, nepochs = 2)
+#    test_box_index(box)
+#    test_box_save(box, ofilename)
 
     return True
