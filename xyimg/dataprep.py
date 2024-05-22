@@ -30,7 +30,7 @@ data is saved in a npz file where the dictionaries are stored as values (x, z) a
 """
 GoData = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id'])
 
-frames = {'13bar' : 100, '5bar' : 304, '2bar' : 587, '1bar' : 593}
+frames = {'20bar': 67, '13bar' : 100, '5bar' : 304, '2bar' : 587, '1bar' : 593}
 
 def save(odata, ofilename):
     # print('Output file : ', ofilename)
