@@ -146,6 +146,32 @@ def image(coors, data, varname, statistics, bins):
     xyimg        = np.nan_to_num(xyimg, 0) 
     return xyimg
 
+## Test images
+
+def good_ttimage(segimg, extrimg, yy, strict = False):
+    bbimg   = np.logical_and(extrimg, (segimg >= 3))
+    nsize   = int(np.sum(bbimg))
+    ok      = bool((nsize >= 1) and (nsize <= yy + 1))
+    if (strict): ok = ok & (nsize == yy + 1)
+    return ok
+
+
+def ttimage(segimg, extrimg, y, blob_fraction = 0.2):
+    """ generate a test track image using the tru segmentation and extremes image
+    it produces an image where the energy is distributed alongn the track uniformely and some blob energy is added on the blobs
+    """
+    nblobs  = (int(y) + 1) 
+    eblobs  = nblobs * blob_fraction
+    ttimg   = (segimg >= 1) 
+    nsize   = np.sum(ttimg) 
+    ttimg   = ttimg * (1. - eblobs) / nsize
+    bbimg   = np.logical_and(extrimg, (segimg >= 3))
+    nsize   = np.sum(bbimg)
+    #if (nsize == 0): print('Warning no blobs in the event!')
+    nsize = max(1, nsize)
+    bbimg   = bbimg * eblobs / nsize
+    return ttimg + bbimg
+
 
 #--------------
 # Physical Frame
@@ -484,6 +510,27 @@ def test_mix_godata(ifilename1, ifilename2, ofilename):
 
     return True
 
+def _test_ttimage(seg, ext, y, tt, bf):
+    assert np.isclose(np.sum(tt), 1.)
+    nsize       = np.sum(tt > 0.)
+    nblobs      = int(y) + 1
+    emean       = (1 - nblobs * bf) / nsize
+    mask_blobs  = np.logical_and(seg == 3, ext >= 1)
+    mblobs      = np.sum(mask_blobs)
+    eblobs      = np.sum(tt[mask_blobs])
+    assert np.isclose(eblobs, nblobs * bf + mblobs * emean)
+    return True
+
+
+def test_ttimages(ifile):
+    idata = load(ifile)
+
+    for i in range(min(len(idata.y), 10)):
+        seg, ext, yi = idata.zdic['seg'][i], idata.zdic['ext'][i], idata.y[i]
+        tt = ttimage(seg, ext, yi, 0.2)
+        _test_ttimage(seg, ext, yi, tt, 0.2)
+    return True
+
 
 def tests(path):
 
@@ -514,7 +561,10 @@ def tests(path):
     ifilename2 = path + voxel_filename(pressure, sample2)
     test_run(ifilename2, 'temp/sample2', ('x', 'y'), (10., 10.), 100.)
 
-    test_mix_godata('temp/sample1_xy_10x10_100.npz', 'temp/sample2_xy_10x10_100.npz', 'temp/test_'+pressure)
+    ofile = 'temp/test_'+pressure
+    test_mix_godata('temp/sample1_xy_10x10_100.npz', 'temp/sample2_xy_10x10_100.npz', ofile)
     
+    test_ttimages(ofile + '.npz')
+
     print('Passed all tests!')
     return True

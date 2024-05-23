@@ -25,23 +25,41 @@ GoCNNBox = namedtuple('GoCNNBox' , ['model', 'dataset', 'epochs', 'index', 'y', 
 # data
 #-------------------
 
+def _xs(dic, labels):
+    """ select from the dictionary the list of arrays with labels with m-size
+        and convert them into a numpy array with first dimension has m-size.
+    """
+    xs = np.array([dic[label] for label in labels])
+    xs = np.swapaxes(xs, 0, 1)
+    return xs
+
+        
 
 class GoDataset(Dataset):
 
     def __init__(self, filename, labels):
-        def _xs(dic, labels):
-            xs = np.array([dic[label] for label in labels])
-            xs = np.swapaxes(xs, 0, 1)
-            return xs
-
         self.filename = filename
         self.labels   = labels
         odata         = dp.load(filename)
-        self.xs       = _xs(odata.xdic, labels)
         self.ys       = odata.y
         self.ids      = odata.id
-        self.zlabels  = list(odata.zdic.keys())
-        self.zs       = _xs(odata.zdic, self.zlabels)
+
+        self.xs                = self._get_xs(odata, labels)
+        self.zs, self.zlabels  = self._get_zs(odata)
+
+    def _get_xs(self, odata, labels):
+        return _xs(odata.xdic, labels)
+
+    def _get_zs(self, odata):
+        zlabels = list(odata.zdic.keys())
+        return _xs(odata.zdic, zlabels), zlabels
+        
+    def filter(self, mask):
+        self.xs   = self.xs [mask]
+        self.zs   = self.zs [mask]
+        self.ys   = self.ys [mask]
+        self.ids  = self.ids[mask]
+        self.mask = self.mask
 
     def __str__(self):
         s  = 'Dataset : \n'
@@ -63,7 +81,45 @@ class GoDataset(Dataset):
         yi = torch.tensor(yi, dtype = torch.float)
         return xi, yi
 
-class GoDataset3DImg(GoDataset):
+class GoDatasetInv(GoDataset):
+    """ Swap reco <-> mc images and now mc images are used a seed (x) for NN
+    """
+
+    #def __init__(self, filename, labels):
+    #    super().__init__(filename, labels)
+
+    def _get_xs(self, odata, labels):
+        return _xs(odata.zdic, labels)
+    
+    def _get_zs(self, odata):
+        zlabels = list(odata.xdic.keys())
+        return _xs(odata.xdic, zlabels), zlabels
+
+class GoDatasetTest(GoDataset):
+    """ create test-seed (x) using the true MC information
+    """
+
+    def __init__(self, filename, labels):
+        super().__init__(filename, labels)
+        self.filter(self.mask)
+
+    def _get_xs(self, odata, labels):
+        assert len(labels) == 1
+        label = labels[0]
+        seg = odata.zdic['seg']
+        ext = odata.zdic['ext']
+        y   = odata.y
+        tt  = [dp.ttimage(seg[i], ext[i], y[i]) for i in range(len(y))]
+        dd = {label : tt}
+        self.xs = _xs(dd, labels)
+        mask = [bool(dp.good_ttimage(seg[i], ext[i], y[i], True)) for i in range(len(y))]
+        self.mask = mask
+        return _xs(dd, labels)
+    
+    
+
+
+class GoDataset3D(GoDataset):
     """ special class for 3D images, that are (x, x, y), and they are converted in (x, y) with x-depth images
     """
 
@@ -75,6 +131,14 @@ class GoDataset3DImg(GoDataset):
         self.xs = np.squeeze(xxs, 4)
         zzs     = np.swapaxes(self.zs, 3, 4)
         self.zs = np.swapaxes(zzs, 2, 3)
+
+dataset = {'GoDataset'      : GoDataset, 
+           'GoDatasetInv'   : GoDatasetInv,
+           'GoDataset3D'    : GoDataset3D,
+           'GoDatasetTest'  : GoDatasetTest}
+
+#----- PyTorch data operations
+
 
 def _index(nsize, fractions):
     index = [int(i*nsize) for i in fractions]
@@ -348,19 +412,20 @@ def false_positives_indices(y, yp, yp0, index0 = 0):
 # Tests
 #---------
 
-def test_godataset(ifilename, labels):
+def test_godataset(ifilename, labels, DSet = GoDataset):
 
     odata  = dp.load(ifilename)
 
     def _test(labels):
-        dataset = GoDataset(ifilename, labels)
+        dataset = DSet(ifilename, labels)
         assert dataset.xs.shape[1] == len(labels)
         nsize = len(dataset)
         assert dataset.xs.shape[0] == nsize
-        assert dataset.xs.shape[0] == nsize
+        xdic = odata.xdic if DSet == GoDataset else odata.zdic
+        #zdic = odata.zdic if DSet == GoDataset else odata.xdic
         i = random.choice(range(nsize))
         for j, label in enumerate(labels):
-            assert np.all(odata.xdic[label][i] == dataset.xs[i, j])
+            assert np.all(xdic[label][i] == dataset.xs[i, j])
         assert odata.y[i] == dataset.ys[i]
         assert dataset.zs.shape[0] == nsize
         assert dataset.zs.shape[1] == len(dataset.zlabels)
@@ -368,7 +433,6 @@ def test_godataset(ifilename, labels):
     _test(labels)
     _test((labels[0],))
     return True
-
 
 
 def test_box_index(box):
@@ -397,10 +461,27 @@ def test(ifilename):
     ofilename = dp.prepend_filename(ifilename, 'test_cnn')
     print('output filename ', ofilename)
 
-    labels = ['esum', 'emax', 'ecount']
-    test_godataset(ifilename, labels)
-    dset = GoDataset(ifilename, labels)
-    box = run(dset, ofilename = ofilename, nepochs = 4)
+    # print('--- data set ---')
+    # labels = ['esum', 'emax', 'ecount']
+    # test_godataset(ifilename, labels)
+    # dset = GoDataset(ifilename, labels)
+    # box = run(dset, ofilename = ofilename, nepochs = 4)
+    # test_box_index(box)
+    # test_box_save(box, ofilename)
+
+    # print('--- data set inv ---')
+    # labels = ['seg', 'ext']
+    # test_godataset(ifilename, labels, GoDatasetInv)
+    # dset = GoDatasetInv(ifilename, labels)
+    # box = run(dset, ofilename = ofilename, nepochs = 4)
+    # test_box_index(box)
+    # test_box_save(box, ofilename)
+
+    print('--- data set test ---')
+    labels = ['test']
+    #test_godataset(ifilename, labels, GoDatasetTest)
+    dset = GoDatasetTest(ifilename, labels)
+    box  = run(dset, ofilename = ofilename, nepochs = 4)
     test_box_index(box)
     test_box_save(box, ofilename)
 
