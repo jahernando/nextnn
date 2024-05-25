@@ -198,18 +198,18 @@ class GoCNN(nn.Module):
             return str(x.size())[11: -1]
         if (self.debug): s = 'CNN : \n   ' + _sshape(x) 
         x = self.bn1(F.leaky_relu(self.conv1(x)))
-        if (self.debug): s = s + ' > ' + _sshape(x) 
+        if (self.debug): s = s + ' => ' + _sshape(x) 
         x = self.bn2(F.leaky_relu(self.conv2(x)))
-        if (self.debug): s = s + ' > ' + _sshape(x) 
+        if (self.debug): s = s + ' => ' + _sshape(x) 
         x = self.bn3(F.leaky_relu(self.conv3(x)))
-        if (self.debug): s = s + ' > ' + _sshape(x) 
+        if (self.debug): s = s + '=> ' + _sshape(x) 
         x = x.flatten(start_dim=1)
-        if (self.debug): s = s + ' > ' + _sshape(x) 
+        if (self.debug): s = s + ' => ' + _sshape(x) 
         #x = self.drop(x)
         x = self.fc0(x)
-        if (self.debug): s = s + ' > ' + _sshape(x) + '\n'
+        if (self.debug): s = s + ' => ' + _sshape(x) + '\n'
         x = self.fc1(x)
-        if (self.debug): s = s + ' > ' + _sshape(x) + '\n'
+        if (self.debug): s = s + ' => ' + _sshape(x) + '\n'
         if (self.debug): print(s)
         self.debug = False
         return x
@@ -353,7 +353,62 @@ def run(dataset, nepochs = 10, ofilename = ''):
 
     return GoCNNBox(model, dataset, epochs, index, ys, yps)
 
-#-------------------
+#---------------------
+# Production
+#---------------------
+
+def get_dset(labels):
+    """ select Dataset depending on the labels
+    1) data-set with labels: esum, emean, emax, ecount, zmean
+    2) data-set with mc-image labels: seg, ext
+    3) data-set with test-images labels: test
+    """
+    Dset    = GoDataset
+    if 'seg' in labels:
+        Dset = GoDatasetInv
+    elif 'test' in labels:
+        Dset = GoDatasetTest
+    return Dset
+
+def get_cnn_filenames(pressure, projection, widths, labels, cnn_name = 'cnn_', img_name = 'xymm_'):
+    """ return the formated data files for cnn-input and cnn-output
+    """
+    frame  = dp.frames[pressure]
+    ifile  = dp.xymm_filename(projection, widths, frame, img_name + pressure)
+    ofile  = dp.prepend_filename(ifile, cnn_name + dp.str_concatenate(labels, '+'))
+    #print('input file  : ', ifile)
+    #print('output file : ', ofile)
+    return ifile, ofile
+    
+def production(ipath, opath, pressure, projection, widths, labels, cnn_name = 'cnn_', img_name = 'xymm_', nepochs = 20):
+    """ run a cnn over the input and store the output, returns the cnn-data and results, and the input and output filenames
+    """
+
+    ifile, ofile = get_cnn_filenames(pressure, projection, widths, labels, cnn_name, img_name)
+    print('input file  : ', ipath + ifile)
+    print('output file : ', opath + ofile)
+    Dset    = get_dset(labels)
+    idata   = Dset(ipath + ifile, labels)
+    box     = run(idata, ofilename = opath + ofile, nepochs = nepochs)
+    rejection  = 0.95
+    efficiency = roc_value(box.y, box.yp, rejection)[1]
+    print('efficiency {:2.1f}% at {:2.1f}% rejection'.format(100.*efficiency, 100*rejection))
+    odata     =  np.load(opath + ofile)
+    return (idata, odata)
+
+def retrieve_cnn_data(ipath, opath, pressure, projection, widths, labels, cnn_name = 'cnn_'):
+    """ retrieve the input and output data of a cnn (after the cnn has run)
+    """
+    ifile, ofile = get_cnn_filenames(pressure, projection, widths, labels, cnn_name)
+    dset  = get_dset(labels)
+    print('data file : ', ipath + ifile)
+    idata = dset(ipath + ifile, labels)
+    print('cnn file  :', opath + ofile)
+    odata = np.load(opath + ofile)
+    return idata, odata
+
+
+#--------------------
 # Plot
 #--------------------
 
@@ -379,6 +434,26 @@ def plot_roc(ys, ysp, zoom = 0.5):
     plt.xlim((zoom, 1.))
     plt.xlabel('rejection'); plt.ylabel("efficiency"); 
     plt.tight_layout()
+
+def plot_event(idata, odata, labels, zlabels = [], ievt = -1):
+    i0   = odata['index'][0]
+    size = odata['index'][1] - i0
+    ievt = int(np.random.choice(size, 1)) if ievt == -1 else ievt
+    kevt = i0 + ievt
+    print('event ', kevt)
+    y0   = idata.ys[kevt]
+    yt0  = odata['y'][ievt]
+    ytp  = odata['yp'][ievt]
+    print('target test      ', int(y0))
+    assert int(y0) == int(yt0)
+    print('target test pred ', float(ytp))
+    success = (ytp >= 0.5) == y0
+    print('success          ', bool(success))
+    dp.plot_imgs(idata.xs, kevt, labels)
+    for i, label in enumerate(labels):
+        print('total    ', label, np.sum(idata.xs[kevt][i]))
+    dp.plot_imgs(idata.zs, kevt, zlabels)
+    return
 
 #-----------
 # Ana
@@ -461,21 +536,21 @@ def test(ifilename):
     ofilename = dp.prepend_filename(ifilename, 'test_cnn')
     print('output filename ', ofilename)
 
-    # print('--- data set ---')
-    # labels = ['esum', 'emax', 'ecount']
-    # test_godataset(ifilename, labels)
-    # dset = GoDataset(ifilename, labels)
-    # box = run(dset, ofilename = ofilename, nepochs = 4)
-    # test_box_index(box)
-    # test_box_save(box, ofilename)
+    print('--- data set ---')
+    labels = ['esum', 'emax', 'ecount']
+    test_godataset(ifilename, labels)
+    dset = GoDataset(ifilename, labels)
+    box  = run(dset, ofilename = ofilename, nepochs = 4)
+    test_box_index(box)
+    test_box_save(box, ofilename)
 
-    # print('--- data set inv ---')
-    # labels = ['seg', 'ext']
-    # test_godataset(ifilename, labels, GoDatasetInv)
-    # dset = GoDatasetInv(ifilename, labels)
-    # box = run(dset, ofilename = ofilename, nepochs = 4)
-    # test_box_index(box)
-    # test_box_save(box, ofilename)
+    print('--- data set inv ---')
+    labels = ['seg', 'ext']
+    test_godataset(ifilename, labels, GoDatasetInv)
+    dset = GoDatasetInv(ifilename, labels)
+    box  = run(dset, ofilename = ofilename, nepochs = 4)
+    test_box_index(box)
+    test_box_save(box, ofilename)
 
     print('--- data set test ---')
     labels = ['test']

@@ -7,26 +7,27 @@ path  = os.environ["LPRDATADIR"]
 ipath = path+'xymm/'
 opath = path+'cnn/'
 
-def get_dset(labels):
-    Dset    = cnn.GoDataset
-    if 'seg' in labels:
-        Dset = cnn.GoDatasetInv
-    elif 'test' in labels:
-        Dset = cnn.GoDatasetTest
-    return Dset
+# def get_dset(labels):
+#     Dset    = cnn.GoDataset
+#     if 'seg' in labels:
+#         Dset = cnn.GoDatasetInv
+#     elif 'test' in labels:
+#         Dset = cnn.GoDatasetTest
+#     return Dset
 
-def production(ipath, opath, pressure, projection, widths, labels, nepochs = 10, name = 'cnn', rejection = 0.95):
+# def production(ipath, opath, pressure, projection, widths, labels, nepochs = 20, name = 'cnn_', rejection = 0.95):
 
-    frame   = dp.frames[pressure]
-    ifile   = dp.xymm_filename(projection, widths, frame, 'xymm_'+pressure)
-    ofile   = dp.prepend_filename(ifile, name)
-    Dset    = get_dset(labels)
-    dataset = Dset(ipath + ifile, labels)
-    box     = cnn.run(dataset, ofilename = opath + ofile, nepochs = nepochs)
-    print('efficiency {:2.1f}% at {:2.1f}% rejection'.format(100.*cnn.roc_value(box.y, box.yp, rejection)[1],
-                                                              100*rejection))
-    return box, ifile, ofile
-
+#     frame   = dp.frames[pressure]
+#     ifile   = dp.xymm_filename(projection, widths, frame, 'xymm_'+pressure)
+#     ofile   = dp.prepend_filename(ifile, name + dp.str_concatenate(labels, '+'))
+#     print('input file  : ', ipath + ifile)
+#     print('output file : ', opath + ofile)
+#     Dset    = get_dset(labels)
+#     dataset = Dset(ipath + ifile, labels)
+#     box     = cnn.run(dataset, ofilename = opath + ofile, nepochs = nepochs)
+#     print('efficiency {:2.1f}% at {:2.1f}% rejection'.format(100.*cnn.roc_value(box.y, box.yp, rejection)[1],
+#                                                               100*rejection))
+#     return box, ifile, ofile
 
 
 pressure = '13bar'
@@ -61,10 +62,10 @@ args = parser.parse_args()
 print('path : ', path)
 print('args : ', args)
 
-_ = production(ipath, opath, 
-               pressure   = args.pressure, 
-               projection = args.projection,
-               widths     = args.widths,
-               labels     = args.labels,
-               nepochs    = args.nepochs)
+_ = cnn.production(ipath, opath, 
+                   pressure   = args.pressure, 
+                   projection = args.projection,
+                   widths     = args.widths,
+                   labels     = args.labels,
+                   nepochs    = args.nepochs)
 print('Done!')
