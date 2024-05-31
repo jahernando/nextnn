@@ -116,9 +116,6 @@ class GoDatasetTest(GoDataset):
         self.mask = mask
         return _xs(dd, labels)
     
-    
-
-
 class GoDataset3D(GoDataset):
     """ special class for 3D images, that are (x, x, y), and they are converted in (x, y) with x-depth images
     """
@@ -171,6 +168,168 @@ def full_sample(dataset):
 # Model
 #----------------------
 
+def _kernel(n, nkernel = 5, mfactor = 2):
+
+    k0 = int(n / mfactor)
+    if  (n % nkernel > 0): k0 = k0 + 1
+    k0 = nkernel if k0 > nkernel else k0
+    k0 = max(2, k0)
+
+    return k0
+
+class ExtGoCNN(nn.Module):
+
+    def __init__(self, m, n, k = 5, f = 2):
+        super().__init__()
+        n_depth, n_width = m, n
+        m1, k1, p1 = 2 * n_depth, int(n_width/2)+1, 0
+        m2, k2, p2 = 2 * m1, int(n_width/4) + 1, 0
+        m3, k3, p3 = 2 * m2, int(n_width/8) + 1, 0
+        self.debug  = True
+        self.conv1  = nn.Conv2d(n_depth, m1, k1, padding = p1)
+        self.bn1    = nn.BatchNorm2d(m1)
+        self.conv2  = nn.Conv2d(m1, m2, k2, padding = p2)
+        self.bn2    = nn.BatchNorm2d(m2)
+        self.conv3  = nn.Conv2d(m2, m3, k3, padding = p3)
+        self.bn3    = nn.BatchNorm2d(m3)
+        self.pool   = nn.MaxPool2d(2, 2)
+        self.smoid  = nn.Sigmoid()
+        n_out = n_width - (k1+k2+k3) + 2*(p1+p2+p2) + 3
+        self.fc0    = nn.Linear(n_out * n_out * m3, m2)
+        self.fc1    = nn.Linear(m2, 1)
+
+        self.flow1 = [self.conv1, self.bn1, self.conv2, self.bn2, self.conv2, self.bn3]
+
+        # self.flow1 = []
+        # self.flow2 = []
+
+        # lrelu = F.leaky_relu
+        # smoid = nn.Sigmoid()
+
+        # # create convolutiona layers till the width is reduced to 2
+        # mi  = m
+        # dim = m * n * n
+        # i = 0
+        # while n > 2:
+        #     k0  = _kernel(n, k, f)
+        #     m0  = m 
+        #     n0  = n
+        #     m   = f * m0 
+        #     n = n - k0 + 1
+        #     if (n <= 1): break
+        #     dim = m * n * n
+        #     print(' Conv  : [', m0, ', ', n0, '] -> [', m, ', ', n, '], ndim = ', dim, ', k = ', k0)
+        #     conv = nn.Conv2d(m0, m, k0, padding = 0)
+        #     setattr(self, 'conv'+str(i), conv)
+        #     self.flow1.append(conv)
+        #     self.flow1.append(lrelu)
+        #     bn   = nn.BatchNorm2d(m)
+        #     setattr(self, 'bn'+str(i), conv)
+        #     i += 1
+        #     self.flow1.append(bn)
+
+        # # linear layers
+        # dim0 = dim
+        # dim  = max(1, f * mi)
+        # lin  = nn.Linear(dim0, dim)
+        # print(' Lin   : ', dim0, ' -> ', dim)
+        # self.flow2.append(lin)
+        # setattr(self, 'lin1', lin)
+        # if (dim >= 2):
+        #     lin = nn.Linear(dim, 1)
+        #     print(' Lin   : ', dim, ' -> ',1)
+        #     self.flow2.append(lin)
+        #     setattr(self, 'lin2', lin)
+        # setattr(self, 'smoid', smoid)
+        # self.flow2.append(smoid)
+
+        # print(self.flow1)
+        # print(self.flow2)
+
+    def forward(self, x):
+
+        def _sshape(x):
+            return str(x.size())[11: -1]
+        
+        if (self.debug): s = 'CNN : ' + _sshape(x)
+        for op in self.flow1:
+            x = op(x)
+            if (self.debug): s = s +'=>' + _sshape(x)
+
+        x = x.flatten(start_dim=1)
+        for op in self.flow2:
+            x = op(x)
+            if (self.debug): s = s +'=>' + _sshape(x)
+
+        if (self.debug):
+            self.debug = True
+            print(s)
+
+        return x 
+
+
+class TestGoCNN(nn.Module):
+    """ A simple binary classification CNN starting from a (n_width, n_widht, n_depth) 
+    """
+
+    # WARNING: you always have to set a layer in the self!
+    def __init__(self, depth, width, kmax = 20, kfactor = 2, padding = 0):
+        super().__init__()
+    
+        self.debug = True
+        self.flow  = []
+
+        def _add_next_conv(m, n, i):
+            k = max(min(int(n/kfactor) + 1, kmax), 2)
+            m0, n0 = m, n
+            m, n   = kfactor * m, n - k + 1
+            i      = i +1
+            if (n <= 0): return m0, n0, i, True
+            conv = nn.Conv2d(m0, m, k, padding = padding)
+            bn   = nn.BatchNorm2d(m)
+            setattr(self, 'conv'+str(i), conv)
+            setattr(self, 'bn'+str(i), bn)
+            self.flow.append(conv)
+            self.flow.append(F.leaky_relu)
+            self.flow.append(bn)
+            print('conv : ', i, ' init ', (m0, n0), ', next ', (m, n), ', kernel ', k)
+            return m, n, i, False
+
+        # convolutions
+        m, n, i, stop = depth, width, 0, False
+        while not stop:
+            m, n, i, stop = _add_next_conv(m, n, i)
+
+        # linear
+        ndim1 = m * n * n
+        ndim2 = max(kfactor * depth, 2)
+        print('lin  : init ', ndim1, ', next', ndim2, ', next ', 1)
+        flat  = lambda x : x.flatten(start_dim = 1)
+        fc1   = nn.Linear(ndim1, ndim2)
+        setattr(self, 'fc1', fc1)
+        fc2   = nn.Linear(ndim2, 1)
+        setattr(self, 'fc1', fc2)
+        smoid  = nn.Sigmoid()
+        self.flow.append(flat)
+        self.flow.append(fc1)
+        self.flow.append(fc2)
+        self.flow.append(smoid)
+
+    def forward(self, x):
+
+        def _sshape(x):
+            si = str(x.size())[11: -1] + '-> '
+            return si
+        #if (self.debug): s = 'CNN: ' + _sshape(x)
+        for op in self.flow:
+            #if (self.debug):  s = s + _sshape(x)
+            x = op(x)
+
+        #if (self.debug):
+        #    print(s)
+        #    self.debug = False
+        return x
+
 
 class GoCNN(nn.Module):
     """ A simple binary classification CNN starting from a (n_width, n_widht, n_depth) 
@@ -189,13 +348,16 @@ class GoCNN(nn.Module):
         self.conv3  = nn.Conv2d(m2, m3, k3, padding = p3)
         self.bn3    = nn.BatchNorm2d(m3)
         self.pool   = nn.MaxPool2d(2, 2)
+        self.smoid  = nn.Sigmoid()
         n_out = n_width - (k1+k2+k3) + 2*(p1+p2+p2) + 3
-        self.fc0    = nn.Linear(n_out * n_out * m3, m1)
-        self.fc1    = nn.Linear(m1, 1)
+        self.fc0    = nn.Linear(n_out * n_out * m3, m2)
+        self.fc1    = nn.Linear(m2, 1)
 
     def forward(self, x):
         def _sshape(x):
-            return str(x.size())[11: -1]
+            si = str(x.size())[11: -1]
+            print(si)
+            return si
         if (self.debug): s = 'CNN : \n   ' + _sshape(x) 
         x = self.bn1(F.leaky_relu(self.conv1(x)))
         if (self.debug): s = s + ' => ' + _sshape(x) 
@@ -208,7 +370,8 @@ class GoCNN(nn.Module):
         #x = self.drop(x)
         x = self.fc0(x)
         if (self.debug): s = s + ' => ' + _sshape(x) + '\n'
-        x = self.fc1(x)
+        x = self.smoid(self.fc1(x))
+        #x = self.fc1(x)
         if (self.debug): s = s + ' => ' + _sshape(x) + '\n'
         if (self.debug): print(s)
         self.debug = False
@@ -219,43 +382,21 @@ class GoCNN(nn.Module):
 # Fit
 #---------------------
 
+# PyTourch Energy loss (Mean Squared Error and Binary Cross Entropy)
+#nn_loss_mse  = nn.MSELoss()
+#nn_loss_bce  = nn.BCELoss()
 
 def chi2_loss(ys_pred, ys):
     squared_diffs = (ys_pred - ys) ** 2
     return squared_diffs.mean()
 
-def chi2weight_loss(ys_pred, ys):
-    w0, w1 = 1., 0.5 
-    ydelta = ys_pred - ys
-    ydelta2 = ydelta * ydelta
-    ydelta2[ys == 0] = ydelta2[ys == 0]/w0**2
-    ydelta2[ys == 1] = ydelta2[ys == 1]/w1**2
-    return  ydelta2.mean()
+loss_functions = {'MSELoss' : nn.MSELoss(),
+                  'BCELoss' : nn.BCELoss(),
+                  'CELoss'  : nn.CrossEntropyLoss(), 
+                  'chi2'    : chi2_loss}
 
-def tstat_loss(ys_pred, ys):
-    ydelta = ys_pred - ys
-    ysig   = 2.*ys - 1.
-    yval   = ydelta * ysig
-    yval2  = yval * yval
-    yval2[yval > 0.] = 1e-6
-    return  yval2.mean()
-
-def tsig_loss(ys_pred, ys):
-    ydelta  = ys_pred - ys
-    yref0   = torch.quantile(ys_pred[ys == 0], 0.5)
-    yref1   = torch.quantile(ys_pred[ys == 1], 0.5)
-    ydelta0 = ys_pred - yref0
-    ydelta1 = ys_pred - yref1
-    ydelta2  = ydelta0
-    ydelta2[ys == 1] = ydelta1[ys == 1]
-    ypm     = 2*ys - 1
-    ysig    = ydelta2 * ypm
-    yval2  = ydelta * ydelta
-    yval2[ysig > 0.] = 1e-6
-    return  yval2.mean()
-
-
-loss_function = chi2_loss
+#loss_function = chi2_loss # Original CNN
+#loss_function = nn_loss_mse
 
 def in_cuda(x):
     if torch.cuda.is_available():
@@ -264,7 +405,7 @@ def in_cuda(x):
     return x
 
 
-def _training(model, optimizer, train):
+def _training(model, optimizer, train, loss_function):
     losses = []
     for xs, ys in train:
         xs = in_cuda(xs)
@@ -278,7 +419,7 @@ def _training(model, optimizer, train):
         losses.append(loss.data.item())
     return losses
 
-def _validation(model, val):
+def _validation(model, val, loss_function):
     losses = []
     with torch.no_grad():
         model.eval()
@@ -290,21 +431,21 @@ def _validation(model, val):
     return losses
 
 
-def _epoch(model, optimizer, train, val):
+def _epoch(model, optimizer, train, val, loss_function):
 
-    losses_train = _training(model, optimizer, train)
-    losses_val   = _validation(model, val)
+    losses_train = _training(model, optimizer, train, loss_function)
+    losses_val   = _validation(model, val, loss_function)
 
     _sum = lambda x: (np.mean(x), np.std(x))
 
     sum =  (_sum(losses_train), _sum(losses_val))
 
-    print('Epoch:  train {:3.3f} +- {:3.3f}  validation {:3.3f} +- {:3.3f}'.format(*sum[0], *sum[1]))
+    print('Epoch:  train {:1.2e} +- {:1.2e}  validation {:1.2e} +- {:1.2e}'.format(*sum[0], *sum[1]))
     return sum 
 
-def train_model(model, optimizer, train, val, nepochs = 20):
+def train_model(model, optimizer, train, val, loss_function, nepochs = 20):
 
-    sums = [_epoch(model, optimizer, train, val) for i in range(nepochs)]
+    sums = [_epoch(model, optimizer, train, val, loss_function) for i in range(nepochs)]
     return sums
     
 
@@ -326,10 +467,15 @@ def prediction(model, test):
 #-------------
 
 
-def run(dataset, nepochs = 10, ofilename = ''):
+config = {'loss_function' : 'chi2'}
 
-    NNType = GoCNN
+def run(dataset, nepochs = 10, ofilename = '', config = config):
+
+    NNType = TestGoCNN
     print(dataset)
+
+    print(config)
+    loss_function = loss_functions[config['loss_function']]
 
     train, test, val, index = subsets(dataset)
     assert len(dataset.xs.shape) == 4
@@ -340,11 +486,11 @@ def run(dataset, nepochs = 10, ofilename = ''):
     model     = in_cuda(model)
     learning_rate = 0.001 # default (tested 0.01, 0.0001 with no improvements)
     optimizer = optim.Adam(model.parameters(), lr = learning_rate)
-    epochs    = train_model(model, optimizer, train, val, nepochs = nepochs)
+    epochs    = train_model(model, optimizer, train, val, loss_function, nepochs = nepochs)
 
-    ys, yps = prediction(model, test)
-    ybin    =  yps >= 0.5
-    acc = 100.*np.sum(ys == ybin)/len(ys)
+    ys, yps   = prediction(model, test)
+    ybin      = yps >= 0.5
+    acc       = 100.*np.sum(ys == ybin)/len(ys)
     print('Test  accuracy {:4.2f}'.format(acc))
 
     if (ofilename != ''):
@@ -380,7 +526,7 @@ def get_cnn_filenames(pressure, projection, widths, labels, cnn_name = 'cnn_', i
     #print('output file : ', ofile)
     return ifile, ofile
     
-def production(ipath, opath, pressure, projection, widths, labels, cnn_name = 'cnn_', img_name = 'xymm_', nepochs = 20):
+def production(ipath, opath, pressure, projection, widths, labels, cnn_name = 'cnn_', img_name = 'xymm_', nepochs = 20, config = config):
     """ run a cnn over the input and store the output, returns the cnn-data and results, and the input and output filenames
     """
 
@@ -389,10 +535,10 @@ def production(ipath, opath, pressure, projection, widths, labels, cnn_name = 'c
     print('output file : ', opath + ofile)
     Dset    = get_dset(labels)
     idata   = Dset(ipath + ifile, labels)
-    box     = run(idata, ofilename = opath + ofile, nepochs = nepochs)
-    rejection  = 0.95
-    efficiency = roc_value(box.y, box.yp, rejection)[1]
-    print('efficiency {:2.1f}% at {:2.1f}% rejection'.format(100.*efficiency, 100*rejection))
+    box     = run(idata, ofilename = opath + ofile, nepochs = nepochs, config = config)
+    #rejection  = 0.95
+    #efficiency = roc_value(box.y, box.yp, rejection)[1]
+    #print('efficiency {:2.1f}% at {:2.1f}% rejection'.format(100.*efficiency, 100*rejection))
     odata     =  np.load(opath + ofile)
     return (idata, odata)
 
