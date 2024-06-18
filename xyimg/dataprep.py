@@ -12,6 +12,11 @@ import matplotlib.pyplot as plt
 
 from collections import namedtuple
 
+
+#-------------
+#   CNN Input Data (Images)
+#------------
+
 """
 GoData is the data prepared for the NN
 contains:
@@ -23,229 +28,23 @@ contains:
     zf   : np.array with absolute physical information (x0, y0, z0 (mm), E-track (MeV)) of the main track
 data is saved in a npz file where the dictionaries are stored as values (x, z) and labels (xlabel, zlabel)
 """
-GoData = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id', 'xf', 'zf'])
+GoData = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id'])
 
-path   = os.environ['LPRDATADIR']
-#path = "/Users/hernando/work/investigacion/NEXT/data/NEXT100/pressure_topology/"
-
-def voxel_filename(pressure, sample):
-    filename = "voxel_dataset_" + pressure + "_" + sample + ".h5"
-    return filename
-
-def urange(var : np.array) -> np.array:
-    """ set the variable in the range [0, 1]
-    input:
-     - var: np.array(float)
-    """
-    vmin, vmax = np.min(var), np.max(var)
-    if vmax <= vmin: return np.zeros(len(var))
-    return (var-vmin)/(vmax-vmin)
-
-def normarange(var: np.array) -> np.array:
-    """ set the variable into a fraction sum(var)
-    """
-    norma = sum(var)
-    return var/norma
-
-def _data(evt):
-    xs, ys, zs = [urange(x) for x in [evt.x, evt.y, evt.z]]
-    es         = normarange(evt.E)
-    data       = {'x':xs, 'y': ys, 'z':zs, 'e':es}
-    return data
-
-def _track_eframe(evt):
-    etot  = np.sum(evt.E)
-    sel   = evt.track_id <= 1
-    etrk  = np.sum(evt[sel].E)
-    return etrk/etot, etrk
-
-def _track_xyzframe(evt):
-
-    sel   = evt.track_id <= 1
-    x0s   = np.array([np.min(x) for x in (evt[sel].x, evt[sel].y, evt[sel].z)])
-    x1s   = np.array([np.max(x) for x in (evt[sel].x, evt[sel].y, evt[sel].z)])
-    dxs   = x1s - x0s
-    return dxs, x0s
-
-def _track_frame(evt):
-    fe , etrk = _track_eframe(evt)
-    dxs, x0s  = _track_xyzframe(evt)
-    xf = np.array(list(dxs) + list((fe,)))
-    zf = np.array(list(x0s) + list((etrk,)))
-    return xf, zf
-
-def _coors(data, coorsnames):
-    coors      = tuple(data[c] for c in coorsnames)
-    return coors
-
-def _xyimg(coors, data, label, bins):
-    varname      = label[0]
-    statistics   = label[1:]
-    #print('label ', label, ', varname', varname, ', statistics ', statistics)
-    var          = data[varname]
-    xyimg , _, _ = stats.binned_statistic_dd(coors, var,  bins = bins, statistic = statistics)
-    xyimg        = np.nan_to_num(xyimg, 0) 
-    return xyimg
-
-def _true_xyimgs(coors, event, bins):
-    _seg = np.array([2, 1, 3])
-    seg = [_seg[x] for x in event.segclass.values]
-    ext = event.ext.values > 0
-    text, _, _ = stats.binned_statistic_dd(coors, ext,  bins = bins, statistic = 'max')
-    tseg, _, _ = stats.binned_statistic_dd(coors, seg,  bins = bins, statistic = 'max')
-    timgs = [np.nan_to_num(img, 0).astype(int) for img in (text, tseg)]
-    return timgs
-
-#-------------
-# Algorithms
-#-------------
-
-def xyimg_levels(bins, labels, track_id = 0):
-    """ created (x, y) images (1 projection only) of labels (i.e 'esum', 'emax', ...)
-    """
-
-    def _func(event):
-
-        sel   = event.track_id <= track_id
-        data  = _data(event[sel])
-        coors = _coors(data, ('x', 'y'))
-
-        xs = [_xyimg(coors, data, label, bins) for label in labels]
-        ys = event.binclass.unique()
-        zs = _true_xyimgs(coors, event[sel], bins)
-
-        return (xs, ys, zs)
-
-    return _func
-
-def xyimg_z(bins, labels, track_id = 0):
-    """ creates a 3D voxelized 'image', the depth of the (x, y) image is z
-    bins must be a 3-element tuple of ints
-    """
-
-    def _func(event):
-
-        sel   = event.track_id <= track_id
-        data  = _data(event[sel])
-        coors = (data['x'], data['y'], data['z'])
-
-        xs = [_xyimg(coors, data, label, bins) for label in labels]
-        ys = event.binclass.unique()
-        zs = _true_xyimgs(coors, event[sel], bins)
-
-        return (xs, ys, zs)
-
-    return _func
-
-def xyimg_projections(bins, labels, track_id = 0):
-    """ creates 3 projections (x, y), (x, z) and (z, y) 
-    each projection contains the images of labels, i,e label = 'esum'
-    """
-
-    def _func(event):
-
-        sel = event.track_id <= track_id
-        data    = _data(event[sel])
-        xycoors = _coors(data, ('x', 'y'))
-        xzcoors = _coors(data, ('x', 'z'))
-        zycoors = _coors(data, ('z', 'y'))
-
-        xs, zs = [], []
-        for coors in (xycoors, xzcoors, zycoors):
-            xs += [_xyimg(coors, data, label, bins) for label in labels]
-            zs += _true_xyimgs(coors, event[sel], bins)
-
-        ys = event[sel].binclass.unique()
-
-        return (xs, ys, zs)
-    
-    return _func
-
-
-_algorithm = {'levels'      : xyimg_levels,
-              'z'           : xyimg_z,
-              'projections' : xyimg_projections}
-
-
-#----------
-#   Run
-#----------
-
-def _xlabels(xyimg_type, labels):
-    if (xyimg_type == 'projections') : 
-        xlabels = []
-        for proj in ('xy', 'xz', 'zy'):
-            xlabels += [proj +'_'+label for label in labels]
-        return xlabels
-    return labels
-         
-def _zlabels(xyimg_type):
-    return _xlabels(xyimg_type, ('ext', 'seg'))
-
-def run(ifilename,
-        ofilename,
-        xyimg_type  =  "levels",
-        bins        = (8, 8),
-        labels      = ['esum', 'ecount', 'emean', 'emax', 'estd'],
-        track_id    = 0,
-        nevents     = -1):
-
-    print('Input voxel file:', ifilename)
-    idata        = pd.read_hdf(ifilename, "voxels") 
-    assert xyimg_type in _algorithm.keys()
-    algorithm    = _algorithm[xyimg_type]
-    event_xyimgs = algorithm(bins, labels, track_id)
-
-    def _dinit(labels):
-        xdic = {}
-        for label in labels: xdic[label] = []
-        return xdic
-    
-    def _dappend(dic, vals):
-        for i, label in enumerate(dic.keys()): dic[label].append(vals[i])
-
-    xdic   = _dinit(_xlabels(xyimg_type, labels)) # images
-    zdic   = _dinit(_zlabels(xyimg_type)) # true images
-    y , id = [], [] # target, id
-    xf, zf = [], [] # frame
-
-    for i, (evtid, evt) in enumerate(idata.groupby(['file_id', 'event'])):
-        if ((nevents >= 1) & (i >= nevents)): break
-        xi, yi, zi = event_xyimgs(evt)
-        file_id    = int(evt.file_id.unique())
-        event_id   = int(evt.event.unique())
-        idi        = np.array((file_id, event_id))
-        xfi, zfi   = _track_frame(evt)
-        _dappend(xdic, xi)
-        _dappend(zdic, zi)
-        y.append(yi)
-        id.append(idi)
-        xf.append(xfi)
-        zf.append(zfi)
-
-    odata = GoData(xdic, y, zdic, id, xf, zf)
-
-    save(odata, ofilename)
-
-    return odata
-
-#----------
-# Save and Load
-#----------
+frames = {'20bar': 67, '13bar' : 100, '5bar' : 304, '2bar' : 587, '1bar' : 593}
 
 def save(odata, ofilename):
-    print('Output file : ', ofilename)
+    # print('Output file : ', ofilename)
     xlabel = list(odata.xdic.keys())
     x = np.array([np.array(odata.xdic[label]) for label in xlabel])
     y = np.array(odata.y)
     zlabel = list(odata.zdic.keys())
     z = np.array([np.array(odata.zdic[label]) for label in zlabel])
     id = np.array(odata.id)
-    xf = np.array(odata.xf)
-    zf = np.array(odata.zf)
+    #xf = np.array(odata.xf)
+    #zf = np.array(odata.zf)
     np.savez_compressed(ofilename, x = x, y = y, z = z, id = id,
-             xlabel = np.array(xlabel), zlabel = np.array(zlabel),
-             xf = xf, zf = zf)
+             xlabel = np.array(xlabel), zlabel = np.array(zlabel))
+#             xf = xf, zf = zf)
     return
 
 def load(ifilename):
@@ -258,15 +57,235 @@ def load(ifilename):
     for i, label in enumerate(xlabel): xdic[label] = x[i]
     zdic = {}
     for i, label in enumerate(zlabel): zdic[label] = z[i]
-
-    xf = data['xf']
-    zf = data['zf']
-
-    odata = GoData(xdic, y, zdic, id,xf, zf)
+    odata = GoData(xdic, y, zdic, id )
     return odata
 
+
+#---------------------
+#  Input Output files
+#---------------------
+
+
+def voxel_filename(pressure, sample, prefix = 'voxel_dataset', ext = '.h5'):
+    """ return the voxel filename
+    inputs:
+        pressure: '13bar', '5bar', '2bar', '1bar'
+        sample  : '1eroi', '0nubb'
+        prefix  : default 'voxel_dataset'
+        ext     : default '.h5'
+    """
+    filename = str_concatenate((prefix, pressure, sample)) + ext
+    return filename
+
+
+def xymm_filename(projection, widths, frame, prefix = 'xymm', ext = '.npz'):
+    """ return the xymm images filename
+    inputs:
+        projection : ('x', 'y'), ('x', 'y', 'z')
+        widths     : i.e (5, 5) (only integers)
+        frame      : 100 (int)
+        prefix     : default 'xymm'
+        ext        : default '.npz'
+    """
+    sproj   = str_concatenate(projection, '')
+    swidths = str_concatenate([str(int(w)) for w in widths], 'x')
+    ofile   = str_concatenate((prefix, sproj, swidths, int(frame)), '_') + ext
+    return ofile
+
+def prepend_filename(ifilename, name , link = '_'):
+    words = ifilename.split('/')
+    fname = words[-1]
+    ofname = str_concatenate((name, fname), link)
+    ofname = str_concatenate(words[:-1], '/') + '/'+ofname
+    return ofname
+
+#---------------
+# Utils
+#----------------
+
+def str_concatenate(words, link = '_'):
+    ss = ''
+    for w in words: ss += str(w) + link
+    nn = len(link)
+    if nn == 0: return ss 
+    return ss[:-nn]
+
+def urange(var : np.array) -> np.array:
+    """ set the variable in the range [0, 1]
+    input:
+     - var: np.array(float)
+    """
+    vmin, vmax = np.min(var), np.max(var)
+    if vmax <= vmin: return np.zeros(len(var))
+    return (var-vmin)/(vmax-vmin)
+
+def uframecentered(var, width):
+    """
+    center the [min, max] of the variable centered in a frame of a given width
+    """
+    vmin, vmax = np.min(var), np.max(var)
+    assert (vmax > vmin)
+    v0   = (width - vmax + vmin)/2.
+    assert (v0 >= 0.) # values should be contained in the width
+    ovar = var - vmin + v0   
+    return ovar
+
+def arange_include_endpoint(start, stop, step):
+    u = np.arange(start, stop, step)
+    uu = list(u)
+    if (uu[-1] < stop): 
+        uu.append(uu[-1] + step)
+    return np.array(uu)
+
+
+def image(coors, data, varname, statistics, bins):
+    """ return the image of the label of data in coors with given bins
+    """
+    var          = data[varname]
+    xyimg , _, _ = stats.binned_statistic_dd(coors, var,  bins = bins, statistic = statistics)
+    xyimg        = np.nan_to_num(xyimg, 0) 
+    return xyimg
+
+## Test images
+
+def good_ttimage(segimg, extrimg, yy, strict = False):
+    bbimg   = np.logical_and(extrimg, (segimg >= 3))
+    nsize   = int(np.sum(bbimg))
+    ok      = bool((nsize >= 1) and (nsize <= yy + 1))
+    if (strict): ok = ok & (nsize == yy + 1)
+    return ok
+
+
+def ttimage(segimg, extrimg, y, blob_fraction = 0.2):
+    """ generate a test track image using the tru segmentation and extremes image
+    it produces an image where the energy is distributed alongn the track uniformely and some blob energy is added on the blobs
+    """
+    nblobs  = (int(y) + 1) 
+    eblobs  = nblobs * blob_fraction
+    ttimg   = (segimg >= 1) 
+    nsize   = np.sum(ttimg) 
+    ttimg   = ttimg * (1. - eblobs) / nsize
+    bbimg   = np.logical_and(extrimg, (segimg >= 3))
+    nsize   = np.sum(bbimg)
+    #if (nsize == 0): print('Warning no blobs in the event!')
+    nsize = max(1, nsize)
+    bbimg   = bbimg * eblobs / nsize
+    return ttimg + bbimg
+
+
+#--------------
+# Physical Frame
+#--------------
+
+def get_frame(idata):
+    """ returns the size in each dimention of the main track of all the events in the h5 file voxel data.
+    """
+    sel   = idata.track_id == 0
+    dmax  = idata[sel].groupby(['file_id', 'event']).max()
+    dmin  = idata[sel].groupby(['file_id', 'event']).min()
+    delta = dmax - dmin
+    dx, dy, dz  = np.max(delta.x), np.max(delta.y), np.max(delta.z)
+    return dx, dy, dz
+
+
+#----------
+#   Run
+#----------
+
+
+def run(ifilename,
+        ofilename,
+        projection = ('x', 'y'),
+        widths     = (10, 10),
+        frame      = 100.,
+        labels     = ['esum', 'ecount', 'emean', 'emax', 'estd'],
+        nevents    = -1, 
+        verbose    = True):
+
+    ofilename = xymm_filename(projection, widths, frame, prefix = ofilename)
+    
+    if (verbose):
+        print('input  filename ', ifilename)
+        print('output filename ', ofilename)
+        print('projection      ', projection)
+        print('widths     (mm) ', widths)
+        print('frame      (mm) ', frame)
+        print('labels          ', labels)
+        print('events          ', nevents)
+
+    assert (len(projection) >= 2) # 2d projection
+    assert (len(projection) <= 3) # 3d projection
+    assert len(projection) == len(widths)
+    assert len(labels) >= 1
+
+    idata   = pd.read_hdf(ifilename, "voxels") 
+    
+    delta  = np.max(get_frame(idata))
+    print('maximum window frame {:4.2f} mm'.format(delta))
+    if (delta > frame):
+        print('Error: Unsificient frame width', frame, ', must be ', delta, 'mm')
+        assert delta <= frame
+
+    bins   = [arange_include_endpoint(0, frame, width) for width in widths]
+    if (verbose):
+        print('image shape in bins ', [len(b)-1 for b in bins])
+
+    def _dinit(labels):
+        xdic = {}
+        for label in labels: xdic[label] = []
+        return xdic
+    
+    def _dappend(dic, vals):
+        for i, label in enumerate(dic.keys()): dic[label].append(vals[i])
+
+    zlabels = ['seg', 'ext']
+    xdic    = _dinit(labels) # images
+    zdic    = _dinit(zlabels) # true images
+    y , id  = [], [] # target, id
+
+    _seg  = np.array([2, 1, 3])
+    def _data(evt):
+        E0         = np.sum(evt.E)
+        sel        = evt.track_id == 0
+        xs, ys, zs = [uframecentered(x, delta) for x in [evt[sel].x, evt[sel].y, evt[sel].z]]
+        es         = evt[sel].E/E0
+        seg        = [_seg[x] for x in evt[sel].segclass.values]
+        ext        = evt[sel].ext.values > 0
+        data       = {'x':xs, 'y': ys, 'z':zs, 'e':es, 'seg': seg, 'ext': ext}
+        return data
+
+    def _coors(data, coorsnames):
+        coors      = tuple(data[c] for c in coorsnames)
+        return coors
+
+
+    for i, (evtid, evt) in enumerate(idata.groupby(['file_id', 'event'])):
+        if ((nevents >= 1) & (i >= nevents)): break
+
+        data  = _data(evt)
+        coors = _coors(data, projection)
+
+        xi  = [image(coors, data, label[:1], label[1:], bins) for label in labels]
+        yi  = evt.binclass.unique()
+        zi  = [image(coors, data, label, 'max', bins) for label in zlabels]
+        idi = (evt.file_id.unique(), evt.event.unique())
+        _dappend(xdic, xi)
+        _dappend(zdic, zi)
+        y.append(yi)
+        id.append(idi)
+
+    odata = GoData(xdic, y, zdic, id)
+
+    ofile = ofilename.split('.')[0]
+    save(odata, ofile)
+    if verbose:
+        print('saved output file ', ofile+'.npz')
+
+    return odata
+
+
 #-----------
-# Mix
+# Mix samples
 #------------
 
 def mix_godata(signal_filename, bkg_filename, ofilename):
@@ -290,8 +309,8 @@ def mix_godata(signal_filename, bkg_filename, ofilename):
     #print('x labels ', xlabel)
     #print('z labels ', zlabel)
     id0, id1 = data0['id'], data1['id']
-    xf1, xf2 = data0['xf'], data1['xf']
-    zf1, zf2 = data0['zf'], data1['zf']
+    #xf1, xf2 = data0['xf'], data1['xf']
+    #zf1, zf2 = data0['zf'], data1['zf']
 
     def _list(a, b):
         return list(a) + list(b)
@@ -305,24 +324,25 @@ def mix_godata(signal_filename, bkg_filename, ofilename):
     ys  = _list(y0, y1)
     zs  = _list(z0, z1)
     ids = _list(id0, id1)
-    xfs = _list(xf1, xf2)
-    zfs = _list(zf1, zf2)
+    #xfs = _list(xf1, xf2)
+    #zfs = _list(zf1, zf2)
 
-    ww = list(zip(xs, ys, zs, ids, xfs, zfs))
+    ww = list(zip(xs, ys, zs, ids))
     random.shuffle(ww)
 
     xs  = np.array([wi[0] for wi in ww])
     ys  = np.array([wi[1] for wi in ww])
     zs  = np.array([wi[2] for wi in ww])
     ids = np.array([wi[3] for wi in ww])
-    xfs = np.array([wi[4] for wi in ww])
-    zfs = np.array([wi[5] for wi in ww])
+    #xfs = np.array([wi[4] for wi in ww])
+    #zfs = np.array([wi[5] for wi in ww])
 
     xs = _dic(_swap(xs), xlabel)
     zs = _dic(_swap(zs), zlabel)
 
-    odata = GoData(xs, ys, zs, ids, xfs, zfs)
+    odata = GoData(xs, ys, zs, ids)
     save(odata, ofilename)
+    print('output file  ', ofilename+'.npz')
     return odata
 
 
@@ -331,6 +351,8 @@ def mix_godata(signal_filename, bkg_filename, ofilename):
 #---------------
 
 def plot_imgs(xs, ievt, labels = -1):
+    """ plots the images of xdic for the event ievt
+    """
 
     def _img(ki):
         label = labels[ki]
@@ -354,14 +376,53 @@ def plot_imgs(xs, ievt, labels = -1):
     return
 
 
+#--------------------------------------------------------
+
 
 #--------------
 # Tests
 #--------------
 
+def test_godata():
+    xdic  = {'a' : (10, 2, 2), 'b': (10, 3, 2)}
+    y     = [1, 1]
+    zdic  = {'1' : (10, 2, 2), '2': (10, 2, 2)}
+    id    = [0, 1]
+    idata = GoData(xdic, y, zdic, id)
+    ofile = 'temp/temp'
+    save(idata, ofile)
+    odata = load(ofile+'.npz')
+    for label in xdic.keys():
+        assert np.all(idata.xdic[label] == odata.xdic[label])
+    for label in zdic.keys():
+        assert np.all(idata.zdic[label] == odata.zdic[label])
+    assert np.all(idata.y  == odata.y)
+    assert np.all(idata.id == odata.id)
+    return True
+
 def test_voxel_filename(pressure, sample):
     filename = voxel_filename(pressure, sample)
     assert filename == "voxel_dataset_" + pressure + "_" + sample + ".h5"
+    return True
+
+def test_xymm_filename(projection, widths, frame, prefix = 'xymm'):
+    sproj  = str_concatenate(projection, '')
+    swidth = str_concatenate([int(w) for w in widths], 'x')
+    ofile0 = xymm_filename(projection, widths, frame, prefix)
+    ofile1 = str_concatenate((prefix, sproj, swidth, frame))+'.npz'
+    assert ofile0 == ofile1
+    return True
+
+def test_str_concatenate():
+    words = ('x', 'y')
+    ss    = str_concatenate(words, '')
+    assert len(ss) == sum([len(x) for x in words])
+    words = np.arange(10)
+    ss    = str_concatenate(words, '_')
+    assert len(ss.split('_')) == len(words)
+    words = ('a', 'b', 'c')
+    ss    = str_concatenate(words, 'x')
+    assert len(ss.split('x')) == len(words)
     return True
 
 def test_urange(x):
@@ -373,85 +434,41 @@ def test_urange(x):
     assert uz[iar] == 0
     return True
 
-def test_normarange(x):
-    ux   = normarange(x)
-    sum  = np.sum(x)
-    assert  np.sum(ux) == 1
-    iar  = np.argmax(x)
-    assert np.isclose(ux[iar], x[iar]/sum)
-    iar  = np.argmin(x)
-    assert np.isclose(ux[iar], x[iar]/sum)
+def test_uframecentered(x, delta):
+    ux   = uframecentered(x, delta)
+    umin, umax = np.min(ux), np.max(ux)
+    udelta = umax - umin
+    d0, d1 = umin, delta - umax
+    assert np.isclose(d0, d1)
     return True
 
-def test_track_frame(ifilename):
-    print('Input voxel file:', ifilename)
-    idata        = pd.read_hdf(ifilename, "voxels") 
-    for i, (_, evt) in enumerate(idata.groupby(['file_id', 'event'])):
-        if (i >= 5): break
-        xf, zf = _track_frame(evt)
-        assert np.all(xf > 0)
-        assert zf[-1] > 0
+def test_arange_include_endpoint(start, stop, step):
+    u = arange_include_endpoint(start, stop, step)
+    assert u[-1] >= stop
+    assert u[-2] <  stop
     return True
 
-def test_xyimg_levels(ifilename):
-    bins   = (8, 8)
-    labels = ('esum', 'ecount', 'emean')
-    print('Input voxel file:', ifilename)
-    idata        = pd.read_hdf(ifilename, "voxels") 
-    event_xyimgs = xyimg_levels(bins, labels)
-    for i, (_, evt) in enumerate(idata.groupby(['file_id', 'event'])):
-        if (i >= 5): break
-        xi, _, zi = event_xyimgs(evt)
-        assert np.all(np.isclose(xi[0], xi[1] * xi[2]))
-        assert (np.sum(zi[0]) >= 1) & (np.sum(zi[0]) <= 2)
-        assert np.any(zi[1] == 3)
-        assert np.max(zi[1]) <= 3
+#------------
+
+def test_frame(ifilename):
+    idata   = pd.read_hdf(ifilename, "voxels") 
+    delta  = np.max(get_frame(idata))
+    for i, (evtid, evt) in enumerate(idata.groupby(['file_id', 'event'])):
+        if (i >= 10): break
+        sel = evt.track_id == 0
+        us  = (evt[sel].x, evt[sel].y, evt[sel].z)
+        dus = [np.max(x) - np.min(x) for x in us]
+        assert np.all(np.array(dus) <= np.array(delta))
     return True
 
-def test_xyimg_projections(ifilename):
-    bins   = (8, 8)
-    labels = ('esum', 'ecount', 'emean')
-    print('Input voxel file:', ifilename)
-    idata        = pd.read_hdf(ifilename, "voxels") 
-    event_xyimgs = xyimg_projections(bins, labels)
-    for i, (_, evt) in enumerate(idata.groupby(['file_id', 'event'])):
-        if (i >= 5): break
-        xi, _, zi = event_xyimgs(evt)
-        for i in range(3):
-            k = 3*i
-            assert np.all(np.isclose(xi[k+0], xi[k+1] * xi[k+2]))
-        for i in range(3):
-            assert (np.sum(zi[2*i]) >= 1) & (np.sum(zi[2*i]) <= 2)
-            assert np.any(zi[2*i + 1] == 3)
-            assert np.max(zi[2*i +1]) <= 3
-    return True
 
-def test_xyimg_z(ifilename):
-    bins   = (8, 8, 4)
-    labels = ('esum', 'emax', 'emean')
-    print('Input voxel file:', ifilename)
-    idata        = pd.read_hdf(ifilename, "voxels") 
-    event_xyimgs = xyimg_z(bins, labels)
-    for i, (_, evt) in enumerate(idata.groupby(['file_id', 'event'])):
-        if (i >= 5): break
-        xi, _, zi = event_xyimgs(evt)
-        assert np.isclose(np.sum(xi[0]), 1.)
-        assert np.sum(xi[1]) <= 1.
-        assert np.sum(xi[2]) <= 1.
-        assert np.all(xi[0] >= xi[1])
-        assert np.all(xi[0] >= xi[2])
-        assert np.all(xi[1] >= xi[2])
-        assert (np.sum(zi[0]) >= 1) & (np.sum(zi[0]) <= 2)
-        assert np.any(zi[1] == 3)
+def test_run(ifilename, ofilename, coors, widths, frame):
+    labels = ['esum', 'ecount', 'emean']
+    odata  = run(ifilename, ofilename, coors, widths, frame, labels , nevents= 10)
+    ofile  = xymm_filename(coors, widths, frame, ofilename)
+    xdata  = load(ofile)
 
-    return True
-
-def test_run_xyimg_levels(ifilename, ofilename = 'temp'):
-    bins  = (8, 8) 
-    odata = run(ifilename, ofilename, bins = bins, nevents= 10)
-    xdata = load(ofilename+'.npz')
-
-    assert np.all(xdata.y == odata.y)
+    assert np.all(xdata.y  == odata.y)
     assert np.all(xdata.id == odata.id)
     for label in xdata.xdic.keys():
         assert np.all(xdata.xdic[label] == odata.xdic[label])
@@ -465,46 +482,6 @@ def test_run_xyimg_levels(ifilename, ofilename = 'temp'):
         assert np.all(np.isclose(esum, emean * ecount))
     return True
 
-def test_run_xyimg_projections(ifilename, ofilename = 'temp'):
-    bins  = (8, 8) 
-    odata = run(ifilename, ofilename, xyimg_type = 'projections', bins = bins, nevents= 10)
-    xdata = load(ofilename+'.npz')
-
-    assert np.all(xdata.y == odata.y)
-    assert np.all(xdata.id == odata.id)
-    for label in xdata.xdic.keys():
-        assert np.all(xdata.xdic[label] == odata.xdic[label])
-    for label in xdata.zdic.keys():
-        assert np.all(xdata.zdic[label] == odata.zdic[label])
-
-    for evt in range(10):
-        for proj in ('xy', 'xz', 'zy'):
-            esum   = odata.xdic[proj+'_esum'][evt]
-            emean  = odata.xdic[proj+'_ecount'][evt]
-            ecount = odata.xdic[proj+'_emean'][evt]
-            assert np.all(np.isclose(esum, emean * ecount))
-
-    return True
-
-def test_run_xyimg_z(ifilename, ofilename = 'temp'):
-
-    bins  = (8, 8, 4) 
-    odata = run(ifilename, ofilename, xyimg_type = 'z', bins = bins, nevents= 10)
-    xdata = load(ofilename+'.npz')
-
-    assert np.all(xdata.y == odata.y)
-    assert np.all(xdata.id == odata.id)
-    for label in xdata.xdic.keys():
-        assert np.all(xdata.xdic[label] == odata.xdic[label])
-    for label in xdata.zdic.keys():
-        assert np.all(xdata.zdic[label] == odata.zdic[label])
-
-    for evt in range(10):
-        esum   = odata.xdic['esum'][evt]
-        emean  = odata.xdic['ecount'][evt]
-        ecount = odata.xdic['emean'][evt]
-        assert np.all(np.isclose(esum, emean * ecount))
-    return True
 
 def test_mix_godata(ifilename1, ifilename2, ofilename):
 
@@ -533,26 +510,61 @@ def test_mix_godata(ifilename1, ifilename2, ofilename):
 
     return True
 
+def _test_ttimage(seg, ext, y, tt, bf):
+    assert np.isclose(np.sum(tt), 1.)
+    nsize       = np.sum(tt > 0.)
+    nblobs      = int(y) + 1
+    emean       = (1 - nblobs * bf) / nsize
+    mask_blobs  = np.logical_and(seg == 3, ext >= 1)
+    mblobs      = np.sum(mask_blobs)
+    eblobs      = np.sum(tt[mask_blobs])
+    assert np.isclose(eblobs, nblobs * bf + mblobs * emean)
+    return True
 
-def tests(path = path, pressure = '13bar'):
+
+def test_ttimages(ifile):
+    idata = load(ifile)
+
+    for i in range(min(len(idata.y), 10)):
+        seg, ext, yi = idata.zdic['seg'][i], idata.zdic['ext'][i], idata.y[i]
+        tt = ttimage(seg, ext, yi, 0.2)
+        _test_ttimage(seg, ext, yi, tt, 0.2)
+    return True
+
+
+def tests(path):
+
+    pressure = '13bar'
     sample1  = '0nubb'
     sample2  = '1eroi'
     
-    test_voxel_filename(pressure, sample1)
-    test_urange(np.arange(30))
-    test_normarange(np.arange(30))
-    
-    ifilename1 = path + voxel_filename(pressure, sample1)
-    test_xyimg_levels(ifilename1)
-    test_xyimg_projections(ifilename1)
-    test_xyimg_z(ifilename1)
+    coords   = ('x', 'y')
+    widths   = (10, 10)
+    frame    = 100
 
-    test_run_xyimg_levels(ifilename1, 'test_levels_sample1')
-    test_run_xyimg_levels(ifilename1, 'test_projections_sample1')
-    test_run_xyimg_z(ifilename1, 'test_z_sample1')
+    test_str_concatenate()
+    test_voxel_filename(pressure, sample1)
+    test_xymm_filename(coords, widths, frame)
+
+    test_godata()
+    test_urange(np.arange(30))
+    test_arange_include_endpoint(0, 10, 0.3)
+    test_uframecentered(np.arange(30), 50)
+
+    ifilename1 = path + voxel_filename(pressure, sample1)
+    test_frame(ifilename1)
+
+    test_run(ifilename1, 'temp/sample1', ('x', 'y'), (10., 10.), 100.,)
+    test_run(ifilename1, 'temp/sample1', ('x', 'z'), (10., 10.), 100.)
+    test_run(ifilename1, 'temp/sample1', ('x', 'y', 'z'), (10., 10., 10.), 100.)
 
     ifilename2 = path + voxel_filename(pressure, sample2)
-    test_run_xyimg_levels(ifilename2, 'test_levels_sample2')
-    test_mix_godata('test_levels_sample1.npz', 'test_levels_sample2.npz', 'test_'+pressure)
+    test_run(ifilename2, 'temp/sample2', ('x', 'y'), (10., 10.), 100.)
+
+    ofile = 'temp/test_'+pressure
+    test_mix_godata('temp/sample1_xy_10x10_100.npz', 'temp/sample2_xy_10x10_100.npz', ofile)
+    
+    test_ttimages(ofile + '.npz')
+
     print('Passed all tests!')
     return True
