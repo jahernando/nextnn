@@ -13,33 +13,11 @@ import xyimg.dataprep          as dp
 
 
 wi         = 25.6 # eV Scintillation threshold
-voxel_size =  2.0 # mm (voxel size)  
-DL         = 0.278 # mm / sqrt(cm)
-DT         = 0.272 # mm / sqrt(cm)
-sigma_L    = 5. # mm
-sigma_T    = 4. # mm
 
+#   DataFrame verion
+#--------------------
 
-# def ielectrons(position, energy, widths, sigmas, wi = wi):
-
-#     def _ie(pos, ene):
-#         nsize = int(np.round(1e6*ene/wi)) # E is in MeV and wi in eV
-#         def _smear(xi, width, sigma): 
-#             x  = xi * np.ones(nsize)
-#             x += width * np.random.uniform(-0.5, 0.5, size = nsize)
-#             x += sigma * np.random.normal(size = nsize)
-#             return x
-#         spos = [_smear(x, width, sigma) for x, width, sigma in zip(pos, widths, sigmas)]
-#         sene = ene * np.ones(nsize) / nsize
-#         return spos, sene
-
-#     vals   = [_ie((x, y, z), ene) for x, y, z, ene in zip(*position, energy)]
-#     ie_pos = [np.concatenate([v[0][i] for v in vals]) for i in range(3)]
-#     ie_ene =  np.concatenate([v[1] for v in vals])
-
-#     return ie_pos, ie_ene
-
-def create_df_ielectrons(dfhit, width, wi = wi):
+def df_ielectrons(dfhit, width, wi = wi):
     """ from a hit DataFrame creates a ionized electrons DF, maintaining the keys
     inputs:
         dfhits: DF, hit information (x, y, z, E) (assumes E is in MeV)
@@ -128,57 +106,106 @@ def df_voxalize(df, width):
 
     return dfvoxel
 
+def df_diff_ievoxel(evt, width0, sigma, width1):
+    
+    dfie = df_ielectrons(evt, width0)
+    dfie = df_norma(dfie, sigma) 
+    dvox = df_voxalize(dfie, width1)
+    return dvox
+
+
+# numpy version
+#---------------
+
+def ielectrons(pos, ene, width):
+
+    nie = np.maximum(np.round(ene/wi), 1).astype(int)
+
+    def _distribute(xi, wi):
+        def _idistribute(xii, nii):
+            x  = xii * np.ones(nii)
+            x += 0.5 * wi * np.random.uniform(0, 1, size = nii)
+            return x
+        xs = [_idistribute(xii, nii) for xii, nii in zip(xi, nie)]
+        return np.concatenate(xs)
+
+    def _ene():
+        def _iene(eneii, nii):
+            return eneii/nii * np.ones(nii)
+        es = [_iene(eneii, nii) for eneii, nii in zip(ene, nie)]
+        return np.concatenate(es)
         
-# def voxelize(position, ene, widths):
-#     bins        = [np.arange(np.min(x) - 2.*width, np.max(x) + 2.*width, width) for x, width in zip(position, widths)]
-#     img , _, _  =  stats.binned_statistic_dd(position, ene,  bins = bins, statistic = 'sum')
-#     ximg        = [stats.binned_statistic_dd(position,   x,  bins = bins, statistic = 'mean')[0] for x in position]
+    ie_pos = [_distribute(xi, wi) for xi, wi in zip(pos, width)]
+    ie_ene = _ene()
+
+    return ie_pos, ie_ene
+
+
+def ielectrons_diffuse(pos, sigma):
+
+    nsize = len(pos[0])
+    def _smear(x, s):
+        return x + s * np.random.normal(0, 1, size = nsize)
+    spos = [_smear(x, s) for x, s in zip(pos, sigma)]
+
+    return spos
+
+_stats_binned = stats.binned_statistic_dd
+
+def voxelize(pos, ene, widths):
+    bins        = [mmbins(x, w) for x, w in zip(pos, widths)]
+    img , _, _  =  _stats_binned(pos, ene,  bins = bins, statistic = 'sum')
+    ximg        = [_stats_binned(pos,   x,  bins = bins, statistic = 'mean')[0] for x in pos]
            
-#     sel    = img > 0
-#     xene   = img[sel].flatten()
-#     xs     = [x[sel].flatten() for x in ximg]
-#     return xs, xene, bins, sel
+    sel    = img > 0
+    xene   = img[sel].flatten()
+    xs     = [x[sel].flatten() for x in ximg]
+    return xs, xene, bins, sel
     
 def _segclass(seg):
     _seg  = np.array([2, 1, 3])
     return [_seg[x] for x in seg]
 
-# def val_in_frame(coors, val, bins, sel, statistic = 'max'):
-#     img , _, _  =  stats.binned_statistic_dd(coors, val,  bins = bins, statistic = statistic)
-#     xval = img[sel].flatten()
-#     np.nan_to_num(xval, 0)
-#     return xval
+def val_in_frame(coors, val, bins, sel, statistic = 'max'):
+    img , _, _  =  stats.binned_statistic_dd(coors, val,  bins = bins, statistic = statistic)
+    xval = img[sel].flatten()
+    np.nan_to_num(xval, 0)
+    return xval
 
+def diff_ievoxel(evt, width0, sigma, width1):
 
-# def event_smear(evt, width0, sigma, width1, wi = wi):
+    labels = ('x', 'y', 'z')
+    pos      = [evt[label].values for label in labels]
+    ene      =  1.e6*evt['E'].values # convert to eV
+    segclass = _segclass(evt['segclass'].values)
+    ext      = evt['ext'].values
+    trkid    = 1 + evt['track_id'].values
+    nhits    = evt['nhits'].values
 
-#     pos      = [evt[label].values for label in ('x', 'y', 'z')]
-#     ene      =  evt['E'].values
-#     segclass = _segclass(evt['segclass'].values)
-#     ext      = evt['ext'].values
-#     trkid    = 1 + evt['track_id'].values
-#     nhits    = evt['nhits'].values
+    ie_pos, ie_ene  = ielectrons(pos, ene, width0)
+    ie_pos          = ielectrons_diffuse(ie_pos, sigma)
+    xpos, xene, bins, sel = voxelize(ie_pos, ie_ene, width1)
+    xnielectron     = val_in_frame(xpos, xene, bins, sel, 'count').astype(int)
+    xsegclass       = val_in_frame(pos, segclass, bins, sel).astype(int)
+    xext            = val_in_frame(pos, ext, bins, sel).astype(int)
+    xtrkid          = val_in_frame(pos, trkid, bins, sel, 'min').astype(int)
+    xnhits          = val_in_frame(pos, nhits, bins, sel, 'sum').astype(int)
+    nsize           = len(xene)
+    file_id         = evt['file_id'].unique()[0]  * np.ones(nsize, int)
+    event           = evt['event'].unique()[0]    * np.ones(nsize, int)
+    binclass        = evt['binclass'].unique()[0] * np.ones(nsize, int)
 
-#     ie_pos, ie_ene        = ielectrons(pos, ene, width0, sigma, wi)
-#     xpos, xene, bins, sel = voxelize(ie_pos, ie_ene, width1)
-#     xsegclass             = val_in_frame(pos, segclass, bins, sel).astype(int)
-#     xext                  = val_in_frame(pos, ext, bins, sel).astype(int)
-#     xtrkid                = val_in_frame(pos, trkid, bins, sel, 'min').astype(int)
-#     xnhits                = val_in_frame(pos, nhits, bins, sel, 'sum').astype(int)
-
-#     dd = {'x' : xpos[0], 'y' : xpos[1], 'z' : xpos[2], 'E' : xene,
-#          'segclass' : xsegclass, 'ext' : xext, 'track_id' : xtrkid, 'nhits' : xnhits}
-
-#     nsize = len(xene)
-#     for label in ('file_id', 'event', 'binclass'):
-#         dd[label] = np.ones(nsize, int) * int(np.unique(evt[label].values))
-
-#     return dd
-
-
-def run(ifilename, ofilename, width0, sigma, width1, verbose = True, nevents = -1):
-
+    dd = {'file_id' : file_id, 'event' : event,
+          'x' : xpos[0], 'y' : xpos[1], 'z' : xpos[2], 'E' : xene,
+          'binclass' : binclass, 'segclass' : xsegclass, 'ext' : xext,
+          'track_id' : xtrkid, 'nhits' : xnhits, 'nielectron' : xnielectron}
     
+    return pd.DataFrame(dd)
+
+
+def run(ifilename, ofilename, width0, sigma, width1, use_df = True,
+        verbose = True, nevents = -1):
+
     if (verbose):
         print('input  filename ', ifilename)
         print('output filename ', ofilename)
@@ -186,30 +213,34 @@ def run(ifilename, ofilename, width0, sigma, width1, verbose = True, nevents = -
         print('sigmas     (mm) ', sigma)
         print('widths-1   (mm) ', width1)
         print('wi         (eV) ', wi)
+        print('use DF          ', use_df)
         print('events          ', nevents)
 
     idata = pd.read_hdf(ifilename, "voxels") 
-    odata = []
+    odata = None
 
-    for i, (evtid, evt) in enumerate(idata.groupby(['file_id', 'event'])):
+    _algo = df_diff_ievoxel if use_df else diff_ievoxel
+
+    def _odata(i, odata, dvox):
+        odata = dvox if i == 0 else pd.concat((odata, dvox), ignore_index = True)
+        return odata
+
+    for i, (_, evt) in enumerate(idata.groupby(['file_id', 'event'])):
         if ((nevents >= 1) & (i >= nevents)): break
 
-        dfie = create_df_ielectrons(evt, width0)
-        dfie = df_norma(dfie, sigma) 
-        dvox = df_voxalize(dfie, width1)
-        print(dvox.columns)
-        odata.append(dvox)
+        dvox  = _algo(evt, width0, sigma, width1)
+        odata = _odata(i, odata, dvox)
     
-    df = pd.concat(odata, ignore_index = True)
-    df.to_hdf(ofilename, 'voxels')
+    odata.to_hdf(ofilename, 'voxels')
 
-    return df
+    return odata
+
     
 #-----------
 #  Plot
 #-----------
 
-def plot_event(df, scatter = True, bins = None):
+def plot_event(df, scatter = False, bins = None):
     marker = '.'; mcolor = 'black'
     cmap   = 'cool' # spring, autumn, binary
     x, y, z, ene = [df[label].values for label in ('x', 'y', 'z', 'E')]
@@ -235,15 +266,14 @@ def plot_event(df, scatter = True, bins = None):
     return
 
 
-
 #-----------
 #  Test
 #------------
 
 
-def test_create_df_ielectrons(evt, width, plot = False):
+def test_df_ielectrons(evt, width, plot = False):
 
-    dfie = create_df_ielectrons(evt, width)
+    dfie = df_ielectrons(evt, width)
 
     Etot = np.sum(evt.E)
     #print(Etot, np.sum(dfie.E))
@@ -325,9 +355,9 @@ def test(ifilename):
     width0 = (2, 2, 2)
     for i in range(3):
         evt = df_event(voxels, 1, i)
-        test_create_df_ielectrons(evt, width0)
+        test_df_ielectrons(evt, width0)
         sigma = (1, 2*i, 3*i)
-        dfie = create_df_ielectrons(evt, width0)
+        dfie = df_ielectrons(evt, width0)
         test_df_norma(dfie, sigma)
         dfie = df_norma(dfie, sigma)
         width = (1, 2*i, 3*i)
