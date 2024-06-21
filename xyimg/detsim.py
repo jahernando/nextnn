@@ -267,27 +267,33 @@ def run(ifilename, ofilename, width0, sigma, width1, use_df = True,
 #  Plot
 #-----------
 
-def plot_event(df, scatter = False, bins = None):
+def plot_event(df, scatter = False, seg = -1, ext = -1,  bins = None):
     marker = '.'; mcolor = 'black'
     cmap   = 'cool' # spring, autumn, binary
     x, y, z, ene = [df[label].values for label in ('x', 'y', 'z', 'E')]
-    plt.subplot(2, 2, 1)
     width = 2.
     if bins == None:
-        bins = [np.arange(np.min(xi), np.max(xi) + width, width) for xi in (x, y, z)]
-    plt.hist2d(x, y, weights = 1e3*ene, bins = (bins[0], bins[1]), cmap = cmap)
-    if (scatter):
-        plt.scatter(x, y, alpha = 0.2, c= mcolor, marker = marker)
+        bins = [np.arange(np.min(xi) - 2 * width, np.max(xi) + 2 * width, width) for xi in (x, y, z)]
+    def _plot(x, y, bins):
+        plt.hist2d(x, y, weights = 1e3*ene, bins = (bins[0], bins[1]), cmap = cmap)
+        if (scatter):
+            plt.scatter(x, y, alpha = 0.2, c= mcolor, marker = marker)
+        if (seg > 0):
+            sel = df.segclass >= seg
+            if (np.sum(sel) > 0):
+                plt.scatter(x[sel], y[sel], alpha = 0.2, c= mcolor, marker = '+')
+        if (ext > 0):
+            sel = df.ext  >= ext
+            if (np.sum(sel) > 0):
+                plt.scatter(x[sel], y[sel], alpha = 1., c= mcolor, marker = '*')
+    plt.subplot(2, 2, 1)
+    _plot(x, y, (bins[0], bins[1]))
     plt.xlabel('x'); plt.ylabel('y')
     plt.subplot(2, 2, 2)
-    plt.hist2d(x, z, weights = 1e3*ene, bins = (bins[0], bins[2]), cmap = cmap)
-    if (scatter):
-        plt.scatter(x, z, alpha = 0.2, c = mcolor, marker = marker)
+    _plot(x, z, (bins[0], bins[2]))
     plt.xlabel('x'); plt.ylabel('z')
     plt.subplot(2, 2, 3)
-    plt.hist2d(z, y, weights = 1e3*ene, bins = (bins[2], bins[1]), cmap = cmap)
-    if (scatter):
-        plt.scatter(z, y, alpha = 0.1, c = mcolor, marker = marker)
+    _plot(z, y, (bins[2], bins[1]))
     plt.xlabel('z'); plt.ylabel('y')
     plt.tight_layout()
     return

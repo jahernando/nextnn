@@ -4,7 +4,9 @@
 import numpy             as np
 import pandas            as pd
 import random            as random
+import sys
 import os
+import time              as time
 
 from   scipy       import stats
 
@@ -28,7 +30,8 @@ contains:
     zf   : np.array with absolute physical information (x0, y0, z0 (mm), E-track (MeV)) of the main track
 data is saved in a npz file where the dictionaries are stored as values (x, z) and labels (xlabel, zlabel)
 """
-GoData = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id'])
+GoData      = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id'])
+#GoDataLabel = namedtuple('GoDataLabel', ['x', 'y', 'z', 'id', 'xlabel', 'zlabel'])
 
 frames = {'20bar': 67, '13bar' : 100, '5bar' : 304, '2bar' : 587, '1bar' : 593}
 
@@ -186,6 +189,122 @@ def get_frame(idata):
     delta = dmax - dmin
     dx, dy, dz  = np.max(delta.x), np.max(delta.y), np.max(delta.z)
     return dx, dy, dz
+
+#-----------
+#   Algorithm
+#-----------
+
+def evt_preparation(evt, track_id = 0):
+    """ locate the main track in the center of the frame, and normalize total energy to 1.
+    Input:
+        - event: DF with (x, y, z, E, track_id)
+        - frams: float, the size of the frame (mm)
+    """
+    sel = evt.track_id == track_id
+    sevt = evt[sel]
+
+    labels = ('x', 'y', 'z')
+    xs     = [sevt[label].values for label in labels]
+    x0s    = [np.mean(x) for x in xs]
+    print('event len    ', len(evt))
+    print('track len    ', len(sevt))
+    print('track center ', x0s)
+
+
+    xevt   = evt.copy()
+    for label, x0 in zip(labels, x0s):
+        xevt[label] = xevt[label] - x0
+
+    ene = np.sum(evt['E'].values)
+    xevt['E'] = xevt['E']/ene
+
+    _seg  = np.array([2, 1, 3])
+    xevt['segclass'] = [_seg[x] for x in xevt.segclass.values]
+
+    return xevt
+
+def evt_godata(evt, xlabel, zlabel, bins):
+
+    def _coors(evt, labels):
+        return [evt[label].values for label in labels]
+
+    def _img(label):
+        proyection, varname, statistic = label.split('_') 
+        coors      = _coors(evt, proyection)
+        var        = evt[varname].values
+        img , _, _ = stats.binned_statistic_dd(coors, var,  bins = bins, statistic = statistic)
+        img        = np.nan_to_num(img, 0) 
+        return img
+    
+    xdic = {}
+    for label in xlabel: xdic[label] = _img(label)
+    y     = evt.binclass.unique()[0]
+
+    zdic = {}
+    for label in zlabel: zdic[label] = _img(label)
+
+    evtid = (evt['file_id'].unique()[0], evt['event'].unique()[0])
+
+    gdata = GoData(xdic, y, zdic, evtid) 
+
+    return gdata
+
+track_id = 0
+
+def run_algo(ifilename,
+             ofilename,
+             width      = (10, 10),
+             frame      = 100.,
+             projection = ['xy', 'xz', 'zy'],
+             xlabel     = ['E_sum'],
+             zlabel     = ['segclass_max', 'ext_max'],
+             nevents    = 10, 
+             verbose    = True):
+    
+    t0 = time.time()
+    if (verbose):
+        print('input  filename ', ifilename)
+        print('output filename ', ofilename)
+        print('projection      ', projection)
+        print('widths     (mm) ', width)
+        print('frame      (mm) ', frame)
+        print('xlabel          ', xlabel)
+        print('zlabel          ', zlabel)
+        print('events          ', nevents)
+
+    xlabel = [[proj + '_' + label for label in xlabel] for proj in projection]
+    zlabel = [[proj + '_' + label for label in zlabel] for proj in projection]
+
+    bins   = [np.arange(-frame, frame, w) for w in width]
+
+    def _evt(evt):
+        evt   = evt_preparation(evt, frame, track_id) 
+        gdata = evt_godata(evt, xlabel, zlabel, bins)
+        return gdata
+
+    def _save(k, odata):
+        return
+
+    ta = time.time()
+    i = 0
+    for k, ifile in enumerate(ifilename):
+        print('opening ', ifile)
+        idata = pd.read_hdf(ifile, 'voxels')
+        odata = []
+        for evtid, evt in idata.groupby(['file_id', 'event']):
+            i += 1
+            if (nevents > 0) & (i > nevents): break
+            if i % 100 == 0: print('processing event ', i, ', id ', evtid)
+            odata.append(_evt(evt))
+        _save(k, odata)
+
+    t1 = time.time()
+    print('event processed   {:d} '.format(i))
+    print('time per event    {:4.2f} s'.format((t1-ta)/i))
+    print('time execution    {:8.1f}  s'.format(t1-t0))
+    print('done!')
+
+    return
 
 
 #----------
@@ -350,14 +469,15 @@ def mix_godata(signal_filename, bkg_filename, ofilename):
 # Plot
 #---------------
 
-def plot_imgs(xs, ievt, labels = -1):
+def plot_imgs(xs, ievt = -1, labels = -1):
     """ plots the images of xdic for the event ievt
     """
 
     def _img(ki):
         label = labels[ki]
         if (isinstance(xs, dict)): 
-            return xs[label][ievt]
+            if (ievt >= 0): return xs[label][ievt]
+            return xs[label]
         return xs[ievt][ki]
 
     labels = list(xs.keys()) if labels == -1 else labels
@@ -374,6 +494,7 @@ def plot_imgs(xs, ievt, labels = -1):
             plt.title(label); plt.colorbar()
         plt.tight_layout()
     return
+
 
 
 #--------------------------------------------------------
