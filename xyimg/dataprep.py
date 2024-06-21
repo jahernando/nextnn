@@ -16,26 +16,38 @@ from collections import namedtuple
 
 
 #-------------
-#   CNN Input Data (Images)
+#   GoData Structurea
 #------------
 
 """
-GoData is the data prepared for the NN
+GoData are 2D images with a target value, true images, and and id
 contains:
     xdic : a dictionary with the images 
     zdic : a dictionary with the true images (extremes and segmentation (0-track, 1-other, 2-blob))
     y    : the target (0-bkg, 1-signal)
     id   : id of the event (file, event-number)
-    xf   : np.array with relative physical information (delta-x, delta-yy, delta-z (mm), fraction of E) of the main track
-    zf   : np.array with absolute physical information (x0, y0, z0 (mm), E-track (MeV)) of the main track
 data is saved in a npz file where the dictionaries are stored as values (x, z) and labels (xlabel, zlabel)
 """
 GoData      = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id'])
-#GoDataLabel = namedtuple('GoDataLabel', ['x', 'y', 'z', 'id', 'xlabel', 'zlabel'])
 
 frames = {'20bar': 67, '13bar' : 100, '5bar' : 304, '2bar' : 587, '1bar' : 593}
 
-def save(odata, ofilename):
+def godata_init(xlabel, zlabel):
+    xdic, zdic, y, id = {}, {}, [], []
+    for label in xlabel: xdic[label] = []
+    for label in zlabel: zdic[label] = []
+    return GoData(xdic, y, zdic, id)
+
+def godata_append(data0, data1):
+    for label in data0.xdic.keys():
+        data0.xdic[label].append(data1.xdic[label])
+    for label in data0.zdic.keys():
+        data0.zdic[label].append(data1.zdic[label])
+    data0.y.append(data1.y)
+    data0.id.append(data1.id)
+    return data0
+
+def godata_save(odata, ofilename):
     # print('Output file : ', ofilename)
     xlabel = list(odata.xdic.keys())
     x = np.array([np.array(odata.xdic[label]) for label in xlabel])
@@ -43,14 +55,11 @@ def save(odata, ofilename):
     zlabel = list(odata.zdic.keys())
     z = np.array([np.array(odata.zdic[label]) for label in zlabel])
     id = np.array(odata.id)
-    #xf = np.array(odata.xf)
-    #zf = np.array(odata.zf)
     np.savez_compressed(ofilename, x = x, y = y, z = z, id = id,
              xlabel = np.array(xlabel), zlabel = np.array(zlabel))
-#             xf = xf, zf = zf)
     return
 
-def load(ifilename):
+def godata_load(ifilename):
     
     data = np.load(ifilename)
     x, y, z, id = data['x'], data['y'], data['z'], data['id']
@@ -196,8 +205,11 @@ def get_frame(idata):
 
 def evt_preparation(evt, track_id = 0):
     """ locate the main track in the center of the frame, and normalize total energy to 1.
+    segclass and ext are modified too:
+        - segclass: (1-track, 2-delta electron, 3-blob)
+        - ext     : (1-track, 2-minor extreme,  3-mayor extreme)
     Input:
-        - event: DF with (x, y, z, E, track_id)
+        - event: DF with (x, y, z, E, track_id, segclass, ext)
         - frams: float, the size of the frame (mm)
     """
     sel = evt.track_id == track_id
@@ -206,10 +218,9 @@ def evt_preparation(evt, track_id = 0):
     labels = ('x', 'y', 'z')
     xs     = [sevt[label].values for label in labels]
     x0s    = [np.mean(x) for x in xs]
-    print('event len    ', len(evt))
-    print('track len    ', len(sevt))
-    print('track center ', x0s)
-
+    #print('event len    ', len(evt))
+    #print('track len    ', len(sevt))
+    #print('track center ', x0s)
 
     xevt   = evt.copy()
     for label, x0 in zip(labels, x0s):
@@ -220,6 +231,13 @@ def evt_preparation(evt, track_id = 0):
 
     _seg  = np.array([2, 1, 3])
     xevt['segclass'] = [_seg[x] for x in xevt.segclass.values]
+
+    def _ext():
+        xi  = (xevt.track_id.values == 0).astype(int)
+        xi += xevt.ext.values
+        return xi
+    
+    xevt['ext'] = _ext()
 
     return xevt
 
@@ -256,7 +274,7 @@ def run_algo(ifilename,
              width      = (10, 10),
              frame      = 100.,
              projection = ['xy', 'xz', 'zy'],
-             xlabel     = ['E_sum'],
+             xlabel     = ['E_sum',],
              zlabel     = ['segclass_max', 'ext_max'],
              nevents    = 10, 
              verbose    = True):
@@ -272,31 +290,38 @@ def run_algo(ifilename,
         print('zlabel          ', zlabel)
         print('events          ', nevents)
 
-    xlabel = [[proj + '_' + label for label in xlabel] for proj in projection]
-    zlabel = [[proj + '_' + label for label in zlabel] for proj in projection]
+    def _label(label):
+        label = [[p + '_' + k for k in label] for p in projection]
+        label = [j for i in label for j in i]
+        return label
+    xlabel = _label(xlabel)
+    zlabel = _label(zlabel)
+
+    print('x labels ', xlabel)
+    print('z labels ', zlabel)
 
     bins   = [np.arange(-frame, frame, w) for w in width]
 
     def _evt(evt):
-        evt   = evt_preparation(evt, frame, track_id) 
+        evt   = evt_preparation(evt) 
         gdata = evt_godata(evt, xlabel, zlabel, bins)
         return gdata
 
-    def _save(k, odata):
-        return
-
     ta = time.time()
     i = 0
+    ifilename = [ifilename,] if isinstance(ifilename, str) else ifilename
     for k, ifile in enumerate(ifilename):
+        odata = godata_init(xlabel, zlabel)
         print('opening ', ifile)
         idata = pd.read_hdf(ifile, 'voxels')
-        odata = []
         for evtid, evt in idata.groupby(['file_id', 'event']):
             i += 1
             if (nevents > 0) & (i > nevents): break
             if i % 100 == 0: print('processing event ', i, ', id ', evtid)
-            odata.append(_evt(evt))
-        _save(k, odata)
+            godata_append(odata, _evt(evt))
+        ofile = ofilename.split('.')[0]+'.'+str(k)
+        print('save godata at ', ofile)
+        godata_save(odata, ofile)
 
     t1 = time.time()
     print('event processed   {:d} '.format(i))
@@ -511,8 +536,8 @@ def test_godata():
     id    = [0, 1]
     idata = GoData(xdic, y, zdic, id)
     ofile = 'temp/temp'
-    save(idata, ofile)
-    odata = load(ofile+'.npz')
+    godata_save(idata, ofile)
+    odata = godata_load(ofile+'.npz')
     for label in xdic.keys():
         assert np.all(idata.xdic[label] == odata.xdic[label])
     for label in zdic.keys():
