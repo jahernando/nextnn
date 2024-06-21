@@ -2,6 +2,7 @@
 #  Module to smeare the MC hits along the tracks and re-voxel
 #  Krisham Mistry, JA Hernando 18/06/24
 
+import time              as time
 import numpy             as np
 import pandas            as pd
 from   scipy       import stats
@@ -61,6 +62,7 @@ def mmbins(x, width):
     """ bins from the minimum to the maximum + width, with width binning
     """
     return np.arange(np.min(x), np.max(x) + width)
+
 
 
 def df_voxalize(df, width):
@@ -202,10 +204,12 @@ def diff_ievoxel(evt, width0, sigma, width1):
     
     return pd.DataFrame(dd)
 
+memory_limit = 1000e6 # b
 
 def run(ifilename, ofilename, width0, sigma, width1, use_df = True,
         verbose = True, nevents = -1):
 
+    t0 = time.time()
     if (verbose):
         print('input  filename ', ifilename)
         print('output filename ', ofilename)
@@ -221,17 +225,40 @@ def run(ifilename, ofilename, width0, sigma, width1, use_df = True,
 
     _algo = df_diff_ievoxel if use_df else diff_ievoxel
 
-    def _odata(i, odata, dvox):
-        odata = dvox if i == 0 else pd.concat((odata, dvox), ignore_index = True)
+    def _odata(init_data, odata, dvox):
+        odata = dvox if init_odata == True else pd.concat((odata, dvox), ignore_index = True)
         return odata
 
-    for i, (_, evt) in enumerate(idata.groupby(['file_id', 'event'])):
+    def _save_odata(kfile, odata):
+        ofile = ofilename.split('.')[0] + '.' +str(kfile) + '.h5'
+        print('saving data      ', ofile)
+        odata.to_hdf(ofile, 'voxels', complevel = 9)
+
+    ta  = time.time()
+    odata = None
+    init_odata, kfile = True, 0
+    for i, (ievt, evt) in enumerate(idata.groupby(['file_id', 'event'])):
         if ((nevents >= 1) & (i >= nevents)): break
 
+        if i % 100 == 0: print('processing event ', i, ', id ', ievt)
+
         dvox  = _algo(evt, width0, sigma, width1)
-        odata = _odata(i, odata, dvox)
-    
-    odata.to_hdf(ofilename, 'voxels')
+        odata = _odata(init_odata, odata, dvox)
+        init_odata = False
+
+        mem = np.sum(odata.memory_usage())
+#        print('memory... {:.2e} b'.format(mem))
+        if (mem >= memory_limit): 
+            _save_odata(kfile, odata)
+            kfile += 1; init_odata = True
+
+    _save_odata(kfile, odata)
+
+    t1 = time.time()
+    print('event processed   {:d} '.format(i))
+    print('time per event    {:4.2f} s'.format((t1-ta)/i))
+    print('time execution    {:8.1f}  s'.format(t1-t0))
+    print('done!')
 
     return odata
 
