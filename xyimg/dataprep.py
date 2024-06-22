@@ -39,6 +39,22 @@ data is saved in a npz file where the dictionaries are stored as values (x, z) a
 """
 GoData      = namedtuple('GoData', ['xdic', 'y', 'zdic', 'id'])
 
+def test_godata():
+    xdic  = {'a' : (10, 2, 2), 'b': (10, 3, 2)}
+    y     = [1, 1]
+    zdic  = {'1' : (10, 2, 2), '2': (10, 2, 2)}
+    id    = [0, 1]
+    idata = GoData(xdic, y, zdic, id)
+    ofile = 'temp/temp'
+    godata_save(idata, ofile)
+    odata = godata_load(ofile+'.npz')
+    for label in xdic.keys():
+        assert np.all(idata.xdic[label] == odata.xdic[label])
+    for label in zdic.keys():
+        assert np.all(idata.zdic[label] == odata.zdic[label])
+    assert np.all(idata.y  == odata.y)
+    assert np.all(idata.id == odata.id)
+    return True
 
 def godata_init(xlabel, zlabel):
     xdic, zdic, y, id = {}, {}, [], []
@@ -68,7 +84,6 @@ def godata_save(odata, ofilename):
     z = np.array([np.array(odata.zdic[label]) for label in zlabel])
     id = np.array(odata.id)
     ofile = _ofile(ofilename)
-    print('save file without extension ', ofile)
     np.savez_compressed(ofile, x = x, y = y, z = z, id = id,
              xlabel = np.array(xlabel), zlabel = np.array(zlabel))
     return
@@ -85,7 +100,6 @@ def godata_load(ifilename):
     for i, label in enumerate(zlabel): zdic[label] = z[i]
     odata = GoData(xdic, y, zdic, id )
     return odata
-
 
 def godata_shuffle(data0, data1):
     """ 
@@ -143,6 +157,10 @@ def filename_voxel(pressure, sample, prefix = 'voxel_dataset', ext = '.h5'):
     filename = ut.str_concatenate((prefix, pressure, sample)) + ext
     return filename
 
+def test_voxel_filename(pressure, sample):
+    filename = filename_voxel(pressure, sample)
+    assert filename == "voxel_dataset_" + pressure + "_" + sample + ".h5"
+    return True
 
 #--------------
 # Frame
@@ -157,6 +175,18 @@ def get_frame(idata, track_id = 0):
     delta = dmax - dmin
     dx, dy, dz  = np.max(delta.x), np.max(delta.y), np.max(delta.z)
     return dx, dy, dz
+
+def test_frame(ifilename):
+    idata  = pd.read_hdf(ifilename, "voxels") 
+    delta  = np.max(get_frame(idata))
+    for i, (evtid, evt) in enumerate(idata.groupby(['file_id', 'event'])):
+        if (i >= 10): break
+        sel = evt.track_id == 0
+        us  = (evt[sel].x, evt[sel].y, evt[sel].z)
+        dus = [np.max(x) - np.min(x) for x in us]
+        assert np.all(np.array(dus) <= np.array(delta))
+    return True
+
 
 #-----------
 #   Algorithm
@@ -326,119 +356,146 @@ def test_evt_ielectrons_diffuse(df, sigma = (1, 2, 3)):
     return True
 
 
-def evt_shot(evt, dfie = None, xlabel = ('xy_E_sum',),
+def evt_shot(xdf, zdf = None, xlabel = ('xy_E_sum',),
              zlabel = ('xy_segclass_mean', 'xy_ext_max'),
              bins = -1, width = (10, 10), frame = 100):
 
     if (bins == -1):
         bins = [np.arange(-frame - w, frame + w, w) for w in width]
-        
 
+    dbins = {}
+    for label, bin in zip(('x', 'y', 'z'), bins): dbins[label] = bin
+        
     def _img(df, label):
         proyection, varname, statistic = label.split('_') 
         xcoors     = coors(df, proyection)
-#        xbins      = 
+        xbins      = [dbins[label] for label in proyection]
         var        = df[varname].values
-        img , _, _ = stats.binned_statistic_dd(xcoors, var,  bins = bins, statistic = statistic)
+        if (varname == 'E'): var = var/np.sum(var) # normalize the energy to the total of the event
+        img , _, _ = stats.binned_statistic_dd(xcoors, var,  bins = xbins, statistic = statistic)
         img        = np.nan_to_num(img, 0) 
         return img
     
     xdic = {}
-    dfie =  dfie if isinstance(dfie, pd.DataFrame) else evt
-
-    for label in xlabel: xdic[label] = _img(dfie, label)
-    y     = evt.binclass.unique()[0]
-
+    for label in xlabel: xdic[label] = _img(xdf, label)
+    y    =  xdf.binclass.unique()[0]
     zdic = {}
-    for label in zlabel: zdic[label] = _img(evt, label)
-
-    evtid = (evt['file_id'].unique()[0], evt['event'].unique()[0])
+    zdf =  zdf if isinstance(zdf, pd.DataFrame) else xdf
+    for label in zlabel: zdic[label] = _img(zdf, label)
+    evtid = (xdf['file_id'].unique()[0], xdf['event'].unique()[0])
 
     gdata = GoData(xdic, y, zdic, evtid) 
 
     return gdata
 
 
+def evt_voxelize(evt, bins = -1, frame = 100, width = (10, 10)):
 
-def evt_godata(evt, xlabel, zlabel, bins):
+    return
 
-    def _coors(evt, labels):
-        return [evt[label].values for label in labels]
 
-    def _img(label):
-        proyection, varname, statistic = label.split('_') 
-        coors      = _coors(evt, proyection)
-        var        = evt[varname].values
-        img , _, _ = stats.binned_statistic_dd(coors, var,  bins = bins, statistic = statistic)
-        img        = np.nan_to_num(img, 0) 
-        return img
+# def evt_godata(evt, xlabel, zlabel, bins):
+
+#     def _coors(evt, labels):
+#         return [evt[label].values for label in labels]
+
+#     def _img(label):
+#         proyection, varname, statistic = label.split('_') 
+#         coors      = _coors(evt, proyection)
+#         var        = evt[varname].values
+#         img , _, _ = stats.binned_statistic_dd(coors, var,  bins = bins, statistic = statistic)
+#         img        = np.nan_to_num(img, 0) 
+#         return img
     
-    xdic = {}
-    for label in xlabel: xdic[label] = _img(label)
-    y     = evt.binclass.unique()[0]
+#     xdic = {}
+#     for label in xlabel: xdic[label] = _img(label)
+#     y     = evt.binclass.unique()[0]
 
-    zdic = {}
-    for label in zlabel: zdic[label] = _img(label)
+#     zdic = {}
+#     for label in zlabel: zdic[label] = _img(label)
 
-    evtid = (evt['file_id'].unique()[0], evt['event'].unique()[0])
+#     evtid = (evt['file_id'].unique()[0], evt['event'].unique()[0])
 
-    gdata = GoData(xdic, y, zdic, evtid) 
+#     gdata = GoData(xdic, y, zdic, evtid) 
 
-    return gdata
+#     return gdata
 
-track_id = 0
+xlabel = ['xy_E_sum', 'yz_E_sum', 'zx_E_sum']
+zlabel = ['xy_segclass_mean', 'xy_ext_max',
+          'yz_segclass_mean', 'yz_ext_max',
+          'zx_segclass_mean', 'zx_ext_max']
+
 
 def run(ifilename,
         ofilename,
-        width      = (10, 10),
+        sigma      = (0, 0, 0),
+        width      = (10, 10, 10),
         frame      = 100.,
-        projection = ['xy', 'xz', 'zy'],
-        xlabel     = ['E_sum', 'E_count'],
-        zlabel     = ['segclass_max', 'ext_max'],
+        xlabel     = xlabel,
+        zlabel     = zlabel,
         nevents    = 10, 
         verbose    = True):
-    
+
+    # check inputs    
+    assert len(sigma) == 3
+    assert len(width) == 3
+    for label in xlabel : assert label.split('_')[0] in ['xy', 'yz', 'zx', 'xyz', 'yzx', 'zxy']
+    for label in xlabel : assert label.split('_')[1] in ['x', 'y', 'z', 'E']
+    for label in xlabel : assert label.split('_')[2] in ['min', 'max', 'mean', 'sum', 'std', 'count']
+    for label in zlabel : assert label.split('_')[0] in ['xy', 'yz', 'zx', 'xyz', 'yzx', 'zxy']
+    for label in zlabel : assert label.split('_')[1] in ['segclass', 'ext']
+    for label in zlabel : assert label.split('_')[2] in ['min', 'max', 'mean']
+    assert np.min(sigma) >= 0.
+    assert np.min(width) > 0.
+    assert frame > 2. * np.min(width)
+
     t0 = time.time()
     if (verbose):
-        print('input  filename ', ifilename)
-        print('output filename ', ofilename)
-        print('projection      ', projection)
-        print('widths     (mm) ', width)
-        print('frame      (mm) ', frame)
-        print('xlabel          ', xlabel)
-        print('zlabel          ', zlabel)
-        print('events          ', nevents)
+        print('input  filename      ', ifilename)
+        print('output filename      ', ofilename)
+        print('sigma diffusion (mm) ', sigma)
+        print('widths          (mm) ', width)
+        print('frame           (mm) ', frame)
+        print('xlabel               ', xlabel)
+        print('zlabel               ', zlabel)
+        print('events               ', nevents)
 
-    def _label(label):
-        label = [[p + '_' + k for k in label] for p in projection]
-        label = [j for i in label for j in i]
-        return label
-    xlabel = _label(xlabel)
-    zlabel = _label(zlabel)
+    do_smearing = np.sum(sigma) > 0
 
-    print('x labels ', xlabel)
-    print('z labels ', zlabel)
+    # def _label(label):
+    #     label = [[p + '_' + k for k in label] for p in projection]
+    #     label = [j for i in label for j in i]
+    #     return label
+    # xlabel = _label(xlabel)
+    # zlabel = _label(zlabel)
+    # print('x labels      : ', xlabel)
+    # print('z labels      : ', zlabel)
 
     bins   = [np.arange(-frame, frame, w) for w in width]
 
     def _evt(evt):
-        evt   = evt_preparation(evt) 
-        gdata = evt_godata(evt, xlabel, zlabel, bins)
-        return gdata
+        evt   = evt_preparation(evt)
+        dfie  = evt_ielectrons(evt, width = hit_width)
+        if (do_smearing):
+            dfie = evt_ielectrons_diffuse(dfie, sigma = sigma)
+        shot  = evt_shot(xdf = dfie, zdf = evt,
+                         xlabel = xlabel, zlabel = zlabel,
+                         bins = bins)
+        return shot
 
     ta = time.time()
     i = 0
     ifilename = [ifilename,] if isinstance(ifilename, str) else ifilename
     odata = godata_init(xlabel, zlabel)
     for k, ifile in enumerate(ifilename):
-        print('opening ', ifile)
+        print('opening voxel file : ', ifile)
         idata = pd.read_hdf(ifile, 'voxels')
         for evtid, evt in idata.groupby(['file_id', 'event']):
             i += 1
             if (nevents > 0) & (i > nevents): break
             if i % 100 == 0: print('processing event ', i, ', id ', evtid)
             godata_append(odata, _evt(evt))
-    print('save godata at ', ofilename)
+    print('save godata filename :', ofilename)
     godata_save(odata, ofilename)
 
     t1 = time.time()
@@ -447,7 +504,7 @@ def run(ifilename,
     print('time execution    {:8.1f}  s'.format(t1-t0))
     print('done!')
 
-    return
+    return odata
 
 #---------------
 # Plot
@@ -499,49 +556,18 @@ def plot_godata(gdata, ievt = -1, labels = -1):
 # Tests
 #--------------
 
-def test_godata():
-    xdic  = {'a' : (10, 2, 2), 'b': (10, 3, 2)}
-    y     = [1, 1]
-    zdic  = {'1' : (10, 2, 2), '2': (10, 2, 2)}
-    id    = [0, 1]
-    idata = GoData(xdic, y, zdic, id)
-    ofile = 'temp/temp'
-    godata_save(idata, ofile)
-    odata = godata_load(ofile+'.npz')
-    for label in xdic.keys():
-        assert np.all(idata.xdic[label] == odata.xdic[label])
-    for label in zdic.keys():
-        assert np.all(idata.zdic[label] == odata.zdic[label])
-    assert np.all(idata.y  == odata.y)
-    assert np.all(idata.id == odata.id)
-    return True
-
-def test_voxel_filename(pressure, sample):
-    filename = filename_voxel(pressure, sample)
-    assert filename == "voxel_dataset_" + pressure + "_" + sample + ".h5"
-    return True
 
 #------------
-
-def test_frame(ifilename):
-    idata  = pd.read_hdf(ifilename, "voxels") 
-    delta  = np.max(get_frame(idata))
-    for i, (evtid, evt) in enumerate(idata.groupby(['file_id', 'event'])):
-        if (i >= 10): break
-        sel = evt.track_id == 0
-        us  = (evt[sel].x, evt[sel].y, evt[sel].z)
-        dus = [np.max(x) - np.min(x) for x in us]
-        assert np.all(np.array(dus) <= np.array(delta))
-    return True
-
 
 def test_run(ifilename, ofilename):
     projection = ['xy', 'xz', 'zy']
     xlabel     = ['E_sum', 'E_count', 'E_mean']
-    width      = (10, 10)
+    zlabel     = ['segclass_mean', 'ext_max']
+    sigma      = (2, 2, 2)
+    width      = (10, 10, 10)
     frame      = 60
-    odata      = run(ifilename, ofilename, width = width, frame = frame,
-                     projection = projection, xlabel = xlabel , nevents= 10)
+    odata      = run(ifilename, ofilename, sigma = sigma, width = width, frame = frame,
+                     projection = projection, xlabel = xlabel , zlavel = zlabel, nevents= 10)
     xdata      = godata_load(ofilename)
 
     assert np.all(xdata.y  == odata.y)
