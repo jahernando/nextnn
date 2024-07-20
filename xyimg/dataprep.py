@@ -101,10 +101,15 @@ def godata_load(ifilename):
     odata = GoData(xdic, y, zdic, id )
     return odata
 
-def godata_shuffle(data0, data1):
+# todo - test load save
+
+def godata_shuffle(ifile0, ifile1):
     """ 
-    mix two GoData objsect and produce a Godats with shuffle contents
+    read two godata from, file and shuffle them into only one
     """
+
+    data0 = np.load(ifile0)
+    data1 = np.load(ifile1)
 
     _swap = lambda x : np.swapaxes(x, 0 , 1)
 
@@ -142,6 +147,10 @@ def godata_shuffle(data0, data1):
     odata = GoData(xs, ys, zs, ids)
     return odata
 
+
+# todo check mix
+
+
 #---------------------
 #  Input Output files
 #---------------------
@@ -157,10 +166,17 @@ def filename_voxel(pressure, sample, prefix = 'voxel_dataset', ext = '.h5'):
     filename = ut.str_concatenate((prefix, pressure, sample)) + ext
     return filename
 
-def test_voxel_filename(pressure, sample):
+def test_filename_voxel(pressure, sample):
     filename = filename_voxel(pressure, sample)
     assert filename == "voxel_dataset_" + pressure + "_" + sample + ".h5"
     return True
+
+
+def filename_godata(pressure, sample, hit_width, sigma, width):
+    _str = lambda a, n : str(a) + str(int(n))+'mm'
+    ofile = ut.str_concatenate((pressure, sample, _str('h', hit_width), _str('s', sigma), _str('w', width)))+'.npz'
+    return ofile
+
 
 #--------------
 # Frame
@@ -192,16 +208,19 @@ def test_frame(ifilename):
 #   Algorithm
 #-----------
 
-def evt_preparation(evt, track_id = track_id, wi = wi):
+
+def evt_preparation(evt, track_id = track_id):
     """ Maniputales the initiall DF of MC hits and does:
-    DF should have 'x', 'y', 'z' (mm), 'E' (MeV), segclass, ext
+    Input:
+        - evt, DF, it should have 'x', 'y', 'z' (mm), 'E' (MeV), segclass, ext
+        - track_id, int, default 0 is the main track
+        - wi, float (MeV), the ionization potential (25 eV)
+    Does
         - locate the hits at the center of the main track (with label track_id)
-        - set the number of ielectrons in each hit (divided E/wi)
-        - normalize the total energy of the event to 1.
         - set segclass :(1-track, 2-delta electron, 3-blob)
         - set ext      :(1-track, 2-main blob, 3-minor blob)
-    Input:
-        - event: DF with (x, y, z, E, track_id, segclass, ext)
+    Return:
+        - evt, DF, with the changes in position, energy and labeling
     """
     sel    = evt.track_id == track_id
     labels = ('x', 'y', 'z')
@@ -214,14 +233,6 @@ def evt_preparation(evt, track_id = track_id, wi = wi):
     xevt   = evt.copy()
     for label, x0 in zip(labels, x0s):
         xevt[label] = evt[label].values - x0
-
-    # compute the number of ielectrons
-    ene = evt['E'].values
-    xevt['nie'] = np.maximum(np.round(ene/wi), 1).astype(int)
-
-    # normalize the hit energy to the total energy of the event (sure?)
-    sumene = np.sum(ene)
-    xevt['Enorma'] = ene/sumene
 
     # change the segmentation (1-track, 2-delta electron, 3-blob)
     _seg  = np.array([2, 1, 3])
@@ -237,26 +248,25 @@ def evt_preparation(evt, track_id = track_id, wi = wi):
 def coors(df, labels = ('x', 'y', 'z')):
     return [df[label].values for label in labels]
 
+def test_evt_preparation(evt, track_id = track_id):
 
-def test_evt_preparation(evt, track_id = track_id, wi = wi):
-
-    xevt = evt_preparation(evt, track_id, wi)
+    xevt = evt_preparation(evt, track_id)
     sel  = evt.track_id == 0
     ys, xs = coors(xevt), coors(evt)
     x0s    = [np.mean(x) for x in coors(evt[sel])]
     diffs = [yi - xi + xi0 for yi, xi, xi0 in zip(ys, xs, x0s)] 
     assert np.all(np.isclose(diffs, 0.))
 
-    assert np.all(evt.E.values == xevt.E.values)
-    ene0 = np.sum(evt.E)
-    ene  = np.sum(xevt.E)
-    assert np.isclose(ene0, ene)
+    # assert np.all(evt.E.values == xevt.E.values)
+    # ene0 = np.sum(evt.E)
+    # ene  = np.sum(xevt.E)
+    # assert np.isclose(ene0, ene)
 
-    ni0  = int(round(ene0/wi))
-    nie  = np.sum(xevt.nie)
-    assert np.isclose(ni0, nie, atol = np.sqrt(ni0))
+    # ni0  = int(round(ene0/wi))
+    # nie  = np.sum(xevt.nie)
+    # assert np.isclose(ni0, nie, atol = np.sqrt(ni0))
 
-    assert np.isclose(np.sum(xevt.Enorma), 1.)
+    # assert np.isclose(np.sum(xevt.Enorma), 1.)
 
     segs = xevt.segclass.unique()
     for i in (1, 2, 3): assert (i in segs)
@@ -268,44 +278,31 @@ def test_evt_preparation(evt, track_id = track_id, wi = wi):
 
     return True
 
-def evt_ielectrons(evt, width = hit_width, wi = wi, transfer_info = True):
+#------
 
-    pos = coors(evt)
-    ene = evt.E
-    nie = np.maximum(np.round(ene/wi), 1).astype(int)
+labels = ['x', 'y', 'z', 'E', 'nie', 'file_id', 'event', 'track_id', 'hit_id', 'binclass', 'segclass', 'ext']
 
-    def _distribute(xi, wi):
-        def _idistribute(xii, nii):
-            x  = xii * np.ones(nii)
-            x +=  wi * np.random.uniform(-0.5, 0.5, size = nii)
-            return x
-        xs = [_idistribute(xii, nii) for xii, nii in zip(xi, nie)]
-        return np.concatenate(xs)
+def evt_ielectrons(evt, wi = wi, width = hit_width):
 
-    def _ene():
-        def _iene(eneii, nii):
-            return eneii/nii * np.ones(nii)
-        es = [_iene(eneii, nii) for eneii, nii in zip(ene, nie)]
-        return np.concatenate(es)
-        
-    # associate to each electron the index of the original hit
-    ieid = np.concatenate([i * np.ones(ni) for i, ni in enumerate(nie)]).astype(int)
-    # distribute the position of the electrion inside the box uniformly
-    iepos = [_distribute(xi, wi) for xi, wi in zip(pos, width)]
-    # share the energy of the hit among the ielectrons 
-    ieene = _ene()
+    ene         = evt.E.values
+    nie         = np.maximum(np.round(ene/wi), 1).astype(int)
+    evt['nie']  = nie
+    evt['hit_id'] = np.arange(len(ene))
 
-    dd = {'hit_id': ieid, 'x': iepos[0], 'y' : iepos[1], 'z' : iepos[2], 'E' : ieene}
+    dd = {}
+    for label in labels:
+        dd[label] = np.repeat(evt[label].values, nie)
 
-    for label in ('segclass', 'ext', 'track_id'):
-        var = evt[label].values
-        dd[label] = (np.concatenate([v * np.ones(ni) for v,ni in zip(var, nie)])).astype(int)
+    niesum = np.sum(nie)
 
-    nsize = len(ieene)
-    for label in ('file_id', 'event', 'binclass'):
-        dd[label] = (evt[label].values[0] * np.ones(nsize)).astype(int)
+    for label, wd in zip(('x', 'y', 'z'), hit_width):
+        dd[label] = dd[label] + wd * np.random.uniform(-0.5, 0.5, size = niesum)
+
+    dd['E']   = dd['E']/dd['nie']
+    dd['nie'] = 1
 
     return pd.DataFrame(dd)
+
 
 def test_evt_ielectron(evt):
 
@@ -315,18 +312,20 @@ def test_evt_ielectron(evt):
     assert len(dfie) == np.sum(nie)
 
     for i in range(len(evt)):
-        sel = (dfie['hit_id'] == i)
-        dii = dfie[sel]
-        #print(' hit id ', i, ', size ', len(dii), nie[i])
-        #print('Energy ', np.sum(dii.E), evt.E.values[i])
-        #print('x pos ', np.min(dii.x), np.max(dii.x),  evt.x.values[i])
-        #print('y pos ', np.min(dii.y), np.max(dii.y),  evt.y.values[i])
-        assert len(dii) == nie[i]
-        #assert np.isclose(np.sum(dii.E), evt.E[i], atol = wi)
-        for k, label in enumerate(('x', 'y', 'z')):
-            assert np.all(np.isclose(np.mean(dii[label]), evt[label].values[i], atol = 0.5*hit_width[k]))
-            assert np.all(np.isclose(np.max(dii[label]),  evt[label].values[i], atol = 0.5*hit_width[k]))
-            assert np.all(np.isclose(np.min(dii[label]),  evt[label].values[i], atol = 0.5*hit_width[k]))
+        ievt = evt[evt.hit_id   == i]
+        dii  = dfie[dfie.hit_id == i]
+
+        assert np.isclose(np.sum(dii.E), ievt.E)
+        assert ievt.nie.values[0] == len(dii)
+
+        def _check_label(label):
+            assert ievt[label].unique()[0] == dii[label].unique()[0]
+        for label in ['file_id', 'event', 'track_id', 'hit_id', 'segclass', 'ext']:
+            _check_label(label)
+
+        for label, wd in zip(('x', 'y', 'z'), hit_width):
+            diff = dii[label].values - ievt[label].values
+            assert np.all(np.abs(diff) <= 0.5 * wd)
 
     return True
 
@@ -336,11 +335,9 @@ def evt_ielectrons_diffuse(dfie, sigma, copy = False):
     xdfie = dfie.copy() if copy else dfie
 
     nsize = len(xdfie)
-    def _smear(x, s):
-        return x + s * np.random.normal(0, 1, size = nsize)
 
     for label, s in zip(('x', 'y', 'z'), sigma):
-        xdfie[label] = _smear(xdfie[label].values, s)
+        xdfie[label] += s * np.random.normal(0, 1, size = nsize)
 
     return xdfie
 
@@ -357,31 +354,50 @@ def test_evt_ielectrons_diffuse(df, sigma = (1, 2, 3)):
 
 
 def evt_shot(xdf, zdf = None, xlabel = ('xy_E_sum',),
-             zlabel = ('xy_segclass_mean', 'xy_ext_max'),
+             zlabel = ('xy_segclass_max', 'xy_ext_max'),
              bins = -1, width = (10, 10), frame = 100):
 
+
+    # set the zdf (the DF with label info) if there is not
+    zdf =  zdf if isinstance(zdf, pd.DataFrame) else xdf
+
+    # total energy of the event
+    Etot = np.sum(xdf.E)
+
+    # select only hits in the frame
+    def _inframe(df, frame):
+        sel = (np.abs(df.x) <= frame) & (np.abs(df.y) <= frame) & (np.abs(df.z) <= frame)
+        return df[sel]
+    ixdf = _inframe(xdf, frame)
+    izdf = _inframe(zdf, frame)
+
+    # define the bins if the client has not defined
     if (bins == -1):
         bins = [np.arange(-frame - w, frame + w, w) for w in width]
 
     dbins = {}
     for label, bin in zip(('x', 'y', 'z'), bins): dbins[label] = bin
         
+    # create a image of a label (if label == 'E' normalize to the total event)
+    # the label has tree words separared by '_' i.e 'xy_E_sum', in general 'projection_var_statistic'
+    #   xy: inficates the projections
+    #   E:  indicates the variable
+    #   sum: indicates the statistics
     def _img(df, label):
         proyection, varname, statistic = label.split('_') 
         xcoors     = coors(df, proyection)
         xbins      = [dbins[label] for label in proyection]
         var        = df[varname].values
-        if (varname == 'E'): var = var/np.sum(var) # normalize the energy to the total of the event
+        if (varname == 'E'): var = var/Etot # normalize the energy to the total of the event
         img , _, _ = stats.binned_statistic_dd(xcoors, var,  bins = xbins, statistic = statistic)
         img        = np.nan_to_num(img, 0) 
         return img
     
     xdic = {}
-    for label in xlabel: xdic[label] = _img(xdf, label)
+    for label in xlabel: xdic[label] = _img(ixdf, label)
     y    =  xdf.binclass.unique()[0]
     zdic = {}
-    zdf =  zdf if isinstance(zdf, pd.DataFrame) else xdf
-    for label in zlabel: zdic[label] = _img(zdf, label)
+    for label in zlabel: zdic[label] = _img(izdf, label)
     evtid = (xdf['file_id'].unique()[0], xdf['event'].unique()[0])
 
     gdata = GoData(xdic, y, zdic, evtid) 
@@ -394,40 +410,16 @@ def evt_voxelize(evt, bins = -1, frame = 100, width = (10, 10)):
     return
 
 
-# def evt_godata(evt, xlabel, zlabel, bins):
-
-#     def _coors(evt, labels):
-#         return [evt[label].values for label in labels]
-
-#     def _img(label):
-#         proyection, varname, statistic = label.split('_') 
-#         coors      = _coors(evt, proyection)
-#         var        = evt[varname].values
-#         img , _, _ = stats.binned_statistic_dd(coors, var,  bins = bins, statistic = statistic)
-#         img        = np.nan_to_num(img, 0) 
-#         return img
-    
-#     xdic = {}
-#     for label in xlabel: xdic[label] = _img(label)
-#     y     = evt.binclass.unique()[0]
-
-#     zdic = {}
-#     for label in zlabel: zdic[label] = _img(label)
-
-#     evtid = (evt['file_id'].unique()[0], evt['event'].unique()[0])
-
-#     gdata = GoData(xdic, y, zdic, evtid) 
-
-#     return gdata
 
 xlabel = ['xy_E_sum', 'yz_E_sum', 'zx_E_sum']
-zlabel = ['xy_segclass_mean', 'xy_ext_max',
-          'yz_segclass_mean', 'yz_ext_max',
-          'zx_segclass_mean', 'zx_ext_max']
+zlabel = ['xy_segclass_max', 'xy_ext_max',
+          'yz_segclass_max', 'yz_ext_max',
+          'zx_segclass_max', 'zx_ext_max']
 
 
 def run(ifilename,
         ofilename,
+        hit_width  = (0, 0, 0),
         sigma      = (0, 0, 0),
         width      = (10, 10, 10),
         frame      = 100.,
@@ -445,6 +437,7 @@ def run(ifilename,
     for label in zlabel : assert label.split('_')[0] in ['xy', 'yz', 'zx', 'xyz', 'yzx', 'zxy']
     for label in zlabel : assert label.split('_')[1] in ['segclass', 'ext']
     for label in zlabel : assert label.split('_')[2] in ['min', 'max', 'mean']
+    assert np.min(hit_width) >= 0.
     assert np.min(sigma) >= 0.
     assert np.min(width) > 0.
     assert frame > 2. * np.min(width)
@@ -453,6 +446,8 @@ def run(ifilename,
     if (verbose):
         print('input  filename      ', ifilename)
         print('output filename      ', ofilename)
+        print('hit widths      (mm) ', hit_width)
+        print('wi              (eV) ', wi * 1e5)
         print('sigma diffusion (mm) ', sigma)
         print('widths          (mm) ', width)
         print('frame           (mm) ', frame)
@@ -460,28 +455,35 @@ def run(ifilename,
         print('zlabel               ', zlabel)
         print('events               ', nevents)
 
-    do_smearing = np.sum(sigma) > 0
+    do_ie_dist     = np.sum(hit_width) > 0
+    do_ie_smearing = np.sum(sigma)     > 0
+    do_ie          = do_ie_dist or do_ie_smearing
 
-    # def _label(label):
-    #     label = [[p + '_' + k for k in label] for p in projection]
-    #     label = [j for i in label for j in i]
-    #     return label
-    # xlabel = _label(xlabel)
-    # zlabel = _label(zlabel)
-    # print('x labels      : ', xlabel)
-    # print('z labels      : ', zlabel)
+    print('do ie            ', do_ie)
+    print('do ie inside hit ', do_ie_dist)
+    print('do ie diffusion  ', do_ie_smearing)
 
     bins   = [np.arange(-frame, frame, w) for w in width]
+    print('image pixel size in frame ', [len(b) for b in bins])
 
-    def _evt(evt):
+    def _evt_ie(evt):
         evt   = evt_preparation(evt)
         dfie  = evt_ielectrons(evt, width = hit_width)
-        if (do_smearing):
+        if (do_ie_smearing):
             dfie = evt_ielectrons_diffuse(dfie, sigma = sigma)
         shot  = evt_shot(xdf = dfie, zdf = evt,
                          xlabel = xlabel, zlabel = zlabel,
                          bins = bins)
         return shot
+
+    def _evt_hit(evt):
+        evt   = evt_preparation(evt)
+        shot  = evt_shot(xdf = evt, zdf = evt,
+                         xlabel = xlabel, zlabel = zlabel,
+                         bins = bins)
+        return shot
+
+    _evt = _evt_ie if do_ie else _evt_hit
 
     ta = time.time()
     i = 0
