@@ -677,7 +677,7 @@ def production(ifile, ofile, config):
     expansion = config['expansion']
     nepochs   = config['nepochs']
     cnnname   = config['cnnname']
-    CNN       = HCNN if cnnname == 'HCNN' else KCNN
+    CNN       = HCNN if cnnname == 'HCNN' else HKCNN if cnnname == 'HKCNN' else KCNN
     padding   = 0    if cnnname == 'HCNN' else 1
 
     _, depth, width, _ = idata.x.shape
@@ -696,7 +696,7 @@ def production(ifile, ofile, config):
 
 def plot_epochs(losses, accus):
     plt.figure()
-    plt.subplot(1, 2, 1)
+    plt.subplot(2, 2, 1)
     us  = [sum[0][0] for sum in losses]
     eus = [sum[0][1] for sum in losses]
     vs  = [sum[1][0] for sum in losses]
@@ -704,7 +704,7 @@ def plot_epochs(losses, accus):
     plt.errorbar(range(len(us)), us, yerr = eus, alpha = 0.5, label = "train")
     plt.errorbar(0.1+np.arange(len(vs)), vs, yerr = evs, alpha = 0.5, label = "validation")
     plt.xlabel("epoch"); plt.ylabel("loss"); plt.legend();
-    plt.subplot(1, 2, 2)
+    plt.subplot(2, 2, 2)
     us  = [acc[0] for acc in accus]
     vs  = [acc[1] for acc in accus]
     plt.plot(range(len(us)), us, label = 'train')
@@ -773,8 +773,12 @@ def roc_value(y, yp, epsilon = 0.9):
     seff  = np.sum(yp[y==1] >= yp0)/len(yp[y==1])
     return yp0, seff
 
-def false_positives_indices(y, yp, yp0, index0 = 0):
+def false_positives_indices(y, yp, yp0 = 0.95, index0 = 0):
     ids = index0 + np.argwhere(np.logical_and(y == 0, yp >= yp0)).flatten()
+    return ids
+
+def false_negatives_indices(y, yp, yp0 = 0.05, index0 = 0):
+    ids = index0 + np.argwhere(np.logical_and(y == 1, yp <= yp0)).flatten()
     return ids
 
 

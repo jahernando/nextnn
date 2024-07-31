@@ -8,14 +8,18 @@ ipath = path+'shots/'
 opath = path+'CNN/'
 
 pressure  = '5bar'
-hit_width =  0
-sigma     =  0
+hit_width =  2
+sigma     =  2
 width     = 10
 
-cnnname   = 'KCNN'
-labels    = ['xy_E_sum']
-expansion = 2 
-nepochs   = 2
+def _hname():
+    ss = pressure+'_h' +str(hit_width)+'s'+str(sigma)+'w'+str(width)
+    return ss
+
+cnnname   = 'HCNN'
+labels    = ['xy_E_sum', 'yz_E_sum', 'zx_E_sum']
+expansion = 8 
+nepochs   = 20
 eloss     = 'CrossEntropyLoss'
 lrate     = 0.001
 
@@ -57,7 +61,7 @@ config['learning_rate']  = args.lrate
 config['nepochs']        = args.nepochs
 
 ifile  = dp.filename_godata(pressure, 'shuffle', hit_width, sigma, width)
-ofile  = cnn.filename_cnn('5bar_h0s0w10', config)
+ofile  = cnn.filename_cnn(_hname(), config)
 
 _ = cnn.production(ipath + ifile, opath + ofile, config)
 print('Done!')

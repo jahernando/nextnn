@@ -410,7 +410,6 @@ def evt_voxelize(evt, bins = -1, frame = 100, width = (10, 10)):
     return
 
 
-
 xlabel = ['xy_E_sum', 'yz_E_sum', 'zx_E_sum']
 zlabel = ['xy_segclass_max', 'xy_ext_max',
           'yz_segclass_max', 'yz_ext_max',
