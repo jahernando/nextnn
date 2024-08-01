@@ -1,59 +1,46 @@
-import xyimg.cnn     as cnn
+import xyimg.cnn      as cnn
 import xyimg.dataprep as dp
 import os
 import argparse
 
 path  = os.environ["LPRDATADIR"]
-ipath = path+'xymm/'
-opath = path+'cnn/'
+ipath = path+'shots/'
+opath = path+'CNN/'
 
-# def get_dset(labels):
-#     Dset    = cnn.GoDataset
-#     if 'seg' in labels:
-#         Dset = cnn.GoDatasetInv
-#     elif 'test' in labels:
-#         Dset = cnn.GoDatasetTest
-#     return Dset
+pressure  = '5bar'
+hit_width =  2
+sigma     =  2
+width     = 10
 
-# def production(ipath, opath, pressure, projection, widths, labels, nepochs = 20, name = 'cnn_', rejection = 0.95):
+def _hname():
+    ss = pressure+'_h' +str(hit_width)+'s'+str(sigma)+'w'+str(width)
+    return ss
 
-#     frame   = dp.frames[pressure]
-#     ifile   = dp.xymm_filename(projection, widths, frame, 'xymm_'+pressure)
-#     ofile   = dp.prepend_filename(ifile, name + dp.str_concatenate(labels, '+'))
-#     print('input file  : ', ipath + ifile)
-#     print('output file : ', opath + ofile)
-#     Dset    = get_dset(labels)
-#     dataset = Dset(ipath + ifile, labels)
-#     box     = cnn.run(dataset, ofilename = opath + ofile, nepochs = nepochs)
-#     print('efficiency {:2.1f}% at {:2.1f}% rejection'.format(100.*cnn.roc_value(box.y, box.yp, rejection)[1],
-#                                                               100*rejection))
-#     return box, ifile, ofile
-
-
-pressure = '13bar'
-projection = ('x', 'y')
-widths   = (10, 10)
-labels   = ['esum',] 
-nepochs  = 20
+cnnname   = 'HCNN'
+labels    = ['xy_E_sum', 'yz_E_sum', 'zx_E_sum']
+expansion = 8 
+nepochs   = 20
+eloss     = 'CrossEntropyLoss'
+lrate     = 0.001
 
 parser = argparse.ArgumentParser(description='cnn')
 
-parser.add_argument('-pressure', type = str, help ="pressure, i.e '13bar'", default = pressure)
-
-parser.add_argument('-projection', metavar = 'N', type = str, nargs = '+',
-                     help = "projections, i.e ('x', 'y')", default = projection)
-
-parser.add_argument('-widths', metavar = 'N', type = int, nargs = '+',
-                     help = "bin widths, i.e (10, 10)", default = widths)
-
-#parser.add_argument('-frame', type = int, help ="frame size (int)", default=frame)
+parser.add_argument('-cnnname', type = str, help = 'name of the cnn', default = cnnname)
 
 parser.add_argument('-labels', metavar = 'N', type = str, nargs='+',
-                    help = "list of images, i.e 'esum', 'emax'", default= labels)
+                    help = "list of images, i.e 'xy_E_sum' ", default= labels)
 
-parser.add_argument('-nepochs', type = int, help ="number of epochs (int)", default=nepochs)
+parser.add_argument('-black', type = bool, help = 'digitial image ', default = False)
 
-#parser.add_argument('-name'   , type = str,  help = "name of the cnn", default= '')
+parser.add_argument('-img_scale', type = float, help = 'image scale factor ', default = 1.)
+
+parser.add_argument('-expansion', type = int, help = "sigma - normal diffusion ", default = expansion)
+
+parser.add_argument('-nepochs', type = int, help = "width - image pixel size ", default = nepochs)
+
+parser.add_argument('-eloss', type = str, help = 'energy loss function', default = eloss)
+
+parser.add_argument('-lrate', type = float, help = 'learning rate', default = lrate)
 
 args = parser.parse_args()
 
@@ -62,10 +49,19 @@ args = parser.parse_args()
 print('path : ', path)
 print('args : ', args)
 
-_ = cnn.production(ipath, opath, 
-                   pressure   = args.pressure, 
-                   projection = args.projection,
-                   widths     = args.widths,
-                   labels     = args.labels,
-                   nepochs    = args.nepochs)
+config                   = cnn.config
+config['labels']         = args.labels
+config['black']          = args.black
+config['img_scale']      = args.img_scale
+
+config['cnnname']        = args.cnnname
+config['expansion']      = args.expansion
+config['loss_function']  = args.eloss
+config['learning_rate']  = args.lrate
+config['nepochs']        = args.nepochs
+
+ifile  = dp.filename_godata(pressure, 'shuffle', hit_width, sigma, width)
+ofile  = cnn.filename_cnn(_hname(), config)
+
+_ = cnn.production(ipath + ifile, opath + ofile, config)
 print('Done!')

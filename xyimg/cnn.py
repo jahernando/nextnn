@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
+import xyimg.utils    as ut 
 import xyimg.dataprep as dp
 
 #----------------------
@@ -18,7 +19,7 @@ import xyimg.dataprep as dp
 #----------------------
 
 from collections import namedtuple
-GoCNNBox = namedtuple('GoCNNBox' , ['model', 'dataset', 'epochs', 'index', 'y', 'yp'])
+CNNResult = namedtuple('CNNResult' , ['model', 'dataset', 'losses', 'accuracies', 'index', 'y', 'yp'])
 
 
 #-------------------
@@ -33,106 +34,58 @@ def _xs(dic, labels):
     xs = np.swapaxes(xs, 0, 1)
     return xs
 
-        
 
 class GoDataset(Dataset):
 
-    def __init__(self, filename, labels):
+    def __init__(self, filename, labels, black = False, img_scale = 1.):
         self.filename = filename
         self.labels   = labels
-        odata         = dp.load(filename)
-        self.ys       = odata.y
-        self.ids      = odata.id
+        odata         = dp.godata_load(filename)
+        self.y        = odata.y
+        #self.y        = odata.y
+        self.id       = odata.id
 
-        self.xs                = self._get_xs(odata, labels)
-        self.zs, self.zlabels  = self._get_zs(odata)
+        ok = [(label in odata.xdic.keys()) for label in labels]
+        ok = (np.sum(ok) == len(ok))
+        xdic = odata.xdic if ok else odata.zdic
+        self.x     = _xs(xdic, labels)
+        
+        # creata a digital (white and black only image)
+        self.black = black
+        if (black):
+            print('black data ')
+            self.x[self.x > 0] = 1 
 
-    def _get_xs(self, odata, labels):
-        return _xs(odata.xdic, labels)
-
-    def _get_zs(self, odata):
-        zlabels = list(odata.zdic.keys())
-        return _xs(odata.zdic, zlabels), zlabels
+        self.factor = img_scale
+        self.x     = img_scale * self.x
+        if (img_scale != 1.):
+            print('scale image by factor ', img_scale)
         
     def filter(self, mask):
-        self.xs   = self.xs [mask]
-        self.zs   = self.zs [mask]
-        self.ys   = self.ys [mask]
-        self.ids  = self.ids[mask]
+        self.x   = self.x [mask]
+        self.y   = self.y [mask]
+        self.id  = self.id[mask]
         self.mask = self.mask
 
     def __str__(self):
         s  = 'Dataset : \n'
         s += '   labels   : ' + str(self.labels)   + '\n'
-        s += '   x shape  : ' + str(self.xs.shape) + '\n'
-        s += '   y shape  : ' + str(self.ys.shape) + '\n'
-        s += '   z labels : ' + str(self.zlabels)  + '\n'
-        s += '   z shape  : ' + str(self.zs.shape) + '\n'
+        s += '   x shape  : ' + str(self.x.shape) + '\n'
+        s += '   y shape  : ' + str(self.y.shape) + '\n'
+        s += '   black    : ' + str(self.black) + '\n'
+        s += '   scale    : ' + str(self.factor)
         return s
 
     def __len__(self):
-        return len(self.ys)
+        return len(self.y)
 
     def __getitem__(self, idx):
-        xi = self.xs[idx]
-        yi = self.ys[idx]
+        xi = self.x[idx]
+        yi = int(self.y[idx])
         xi = torch.tensor(xi, dtype = torch.float) # Add channel dimension
         # if (len(self.labels) == 1): xi.unsqueeze(0) #TODO
-        yi = torch.tensor(yi, dtype = torch.float)
+        yi = torch.tensor(yi)
         return xi, yi
-
-class GoDatasetInv(GoDataset):
-    """ Swap reco <-> mc images and now mc images are used a seed (x) for NN
-    """
-
-    #def __init__(self, filename, labels):
-    #    super().__init__(filename, labels)
-
-    def _get_xs(self, odata, labels):
-        return _xs(odata.zdic, labels)
-    
-    def _get_zs(self, odata):
-        zlabels = list(odata.xdic.keys())
-        return _xs(odata.xdic, zlabels), zlabels
-
-class GoDatasetTest(GoDataset):
-    """ create test-seed (x) using the true MC information
-    """
-
-    def __init__(self, filename, labels):
-        super().__init__(filename, labels)
-        self.filter(self.mask)
-
-    def _get_xs(self, odata, labels):
-        assert len(labels) == 1
-        label = labels[0]
-        seg = odata.zdic['seg']
-        ext = odata.zdic['ext']
-        y   = odata.y
-        tt  = [dp.ttimage(seg[i], ext[i], y[i]) for i in range(len(y))]
-        dd = {label : tt}
-        self.xs = _xs(dd, labels)
-        mask = [bool(dp.good_ttimage(seg[i], ext[i], y[i], True)) for i in range(len(y))]
-        self.mask = mask
-        return _xs(dd, labels)
-    
-class GoDataset3D(GoDataset):
-    """ special class for 3D images, that are (x, x, y), and they are converted in (x, y) with x-depth images
-    """
-
-    def __init__(self, filename, labels):
-        super().__init__(filename, labels)
-        assert len(self.labels)   == 1  # only on1 3D image allowed
-        assert len(self.xs.shape) == 5  # checl that there are 3D images
-        xxs     = np.swapaxes(self.xs, 1, 4)
-        self.xs = np.squeeze(xxs, 4)
-        zzs     = np.swapaxes(self.zs, 3, 4)
-        self.zs = np.swapaxes(zzs, 2, 3)
-
-dataset = {'GoDataset'      : GoDataset, 
-           'GoDatasetInv'   : GoDatasetInv,
-           'GoDataset3D'    : GoDataset3D,
-           'GoDatasetTest'  : GoDatasetTest}
 
 #----- PyTorch data operations
 
@@ -142,7 +95,7 @@ def _index(nsize, fractions):
     index[1] = sum(index)
     return index
 
-def subsets(dataset, fractions = (0.7, 0.2), batch_size = 200, shuffle = False):
+def subsets(dataset, fractions = (0.7, 0.2), batch_size = 100, shuffle = False):
     nsize = len(dataset)
     index = _index(nsize, fractions)
 
@@ -165,238 +118,377 @@ def full_sample(dataset):
 
 
 #---------------------
-# Model
+# Models
 #----------------------
 
-def _kernel(n, nkernel = 5, mfactor = 2):
-
-    k0 = int(n / mfactor)
-    if  (n % nkernel > 0): k0 = k0 + 1
-    k0 = nkernel if k0 > nkernel else k0
-    k0 = max(2, k0)
-
-    return k0
-
-class ExtGoCNN(nn.Module):
-
-    def __init__(self, m, n, k = 5, f = 2):
-        super().__init__()
-        n_depth, n_width = m, n
-        m1, k1, p1 = 2 * n_depth, int(n_width/2)+1, 0
-        m2, k2, p2 = 2 * m1, int(n_width/4) + 1, 0
-        m3, k3, p3 = 2 * m2, int(n_width/8) + 1, 0
-        self.debug  = True
-        self.conv1  = nn.Conv2d(n_depth, m1, k1, padding = p1)
-        self.bn1    = nn.BatchNorm2d(m1)
-        self.conv2  = nn.Conv2d(m1, m2, k2, padding = p2)
-        self.bn2    = nn.BatchNorm2d(m2)
-        self.conv3  = nn.Conv2d(m2, m3, k3, padding = p3)
-        self.bn3    = nn.BatchNorm2d(m3)
-        self.pool   = nn.MaxPool2d(2, 2)
-        self.smoid  = nn.Sigmoid()
-        n_out = n_width - (k1+k2+k3) + 2*(p1+p2+p2) + 3
-        self.fc0    = nn.Linear(n_out * n_out * m3, m2)
-        self.fc1    = nn.Linear(m2, 1)
-
-        self.flow1 = [self.conv1, self.bn1, self.conv2, self.bn2, self.conv2, self.bn3]
-
-        # self.flow1 = []
-        # self.flow2 = []
-
-        # lrelu = F.leaky_relu
-        # smoid = nn.Sigmoid()
-
-        # # create convolutiona layers till the width is reduced to 2
-        # mi  = m
-        # dim = m * n * n
-        # i = 0
-        # while n > 2:
-        #     k0  = _kernel(n, k, f)
-        #     m0  = m 
-        #     n0  = n
-        #     m   = f * m0 
-        #     n = n - k0 + 1
-        #     if (n <= 1): break
-        #     dim = m * n * n
-        #     print(' Conv  : [', m0, ', ', n0, '] -> [', m, ', ', n, '], ndim = ', dim, ', k = ', k0)
-        #     conv = nn.Conv2d(m0, m, k0, padding = 0)
-        #     setattr(self, 'conv'+str(i), conv)
-        #     self.flow1.append(conv)
-        #     self.flow1.append(lrelu)
-        #     bn   = nn.BatchNorm2d(m)
-        #     setattr(self, 'bn'+str(i), conv)
-        #     i += 1
-        #     self.flow1.append(bn)
-
-        # # linear layers
-        # dim0 = dim
-        # dim  = max(1, f * mi)
-        # lin  = nn.Linear(dim0, dim)
-        # print(' Lin   : ', dim0, ' -> ', dim)
-        # self.flow2.append(lin)
-        # setattr(self, 'lin1', lin)
-        # if (dim >= 2):
-        #     lin = nn.Linear(dim, 1)
-        #     print(' Lin   : ', dim, ' -> ',1)
-        #     self.flow2.append(lin)
-        #     setattr(self, 'lin2', lin)
-        # setattr(self, 'smoid', smoid)
-        # self.flow2.append(smoid)
-
-        # print(self.flow1)
-        # print(self.flow2)
-
-    def forward(self, x):
-
-        def _sshape(x):
-            return str(x.size())[11: -1]
-        
-        if (self.debug): s = 'CNN : ' + _sshape(x)
-        for op in self.flow1:
-            x = op(x)
-            if (self.debug): s = s +'=>' + _sshape(x)
-
-        x = x.flatten(start_dim=1)
-        for op in self.flow2:
-            x = op(x)
-            if (self.debug): s = s +'=>' + _sshape(x)
-
-        if (self.debug):
-            self.debug = True
-            print(s)
-
-        return x 
-
-
-class TestGoCNN(nn.Module):
-    """ A simple binary classification CNN starting from a (n_width, n_widht, n_depth) 
-    """
-
-    # WARNING: you always have to set a layer in the self!
-    def __init__(self, depth, width, kmax = 20, kfactor = 2, padding = 0):
-        super().__init__()
     
-        self.debug = True
-        self.flow  = []
-
-        def _add_next_conv(m, n, i):
-            k = max(min(int(n/kfactor) + 1, kmax), 2)
-            m0, n0 = m, n
-            m, n   = kfactor * m, n - k + 1
-            i      = i +1
-            if (n <= 0): return m0, n0, i, True
-            conv = nn.Conv2d(m0, m, k, padding = padding)
-            bn   = nn.BatchNorm2d(m)
-            setattr(self, 'conv'+str(i), conv)
-            setattr(self, 'bn'+str(i), bn)
-            self.flow.append(conv)
-            self.flow.append(F.leaky_relu)
-            self.flow.append(bn)
-            print('conv : ', i, ' init ', (m0, n0), ', next ', (m, n), ', kernel ', k)
-            return m, n, i, False
-
-        # convolutions
-        m, n, i, stop = depth, width, 0, False
-        while not stop:
-            m, n, i, stop = _add_next_conv(m, n, i)
-
-        # linear
-        ndim1 = m * n * n
-        ndim2 = max(kfactor * depth, 2)
-        print('lin  : init ', ndim1, ', next', ndim2, ', next ', 1)
-        flat  = lambda x : x.flatten(start_dim = 1)
-        fc1   = nn.Linear(ndim1, ndim2)
-        setattr(self, 'fc1', fc1)
-        fc2   = nn.Linear(ndim2, 1)
-        setattr(self, 'fc1', fc2)
-        smoid  = nn.Sigmoid()
-        self.flow.append(flat)
-        self.flow.append(fc1)
-        self.flow.append(fc2)
-        self.flow.append(smoid)
-
-    def forward(self, x):
-
-        def _sshape(x):
-            si = str(x.size())[11: -1] + '-> '
-            return si
-        #if (self.debug): s = 'CNN: ' + _sshape(x)
-        for op in self.flow:
-            #if (self.debug):  s = s + _sshape(x)
-            x = op(x)
-
-        #if (self.debug):
-        #    print(s)
-        #    self.debug = False
-        return x
-
-
-class GoCNN(nn.Module):
-    """ A simple binary classification CNN starting from a (n_width, n_widht, n_depth) 
+class KCNN(nn.Module):
     """
-
-    def __init__(self, n_depth, n_width):
+    Defines a convolutional network with a basic architecture:
+    4 - Conv layers that increased the depth and decreasing width
+         convolution (3x3) , reLU batch norm and MaxPool,
+    2 - linear with drop drop (optional) 
+      - previous to last layer has 2-neurons for binnary classification
+      - last layer depends on the loss function: options 'sigmoid, softmax'
+      
+    """
+    def __init__(self, depth, width, kernel = 3, expansion = 2, padding = 1,
+                 pool = 2, dropout_fraction = 0.1, noutput = 2):
         super().__init__()
-        m1, k1, p1 = 2 * n_depth, int(n_width/2)+1, 0
-        m2, k2, p2 = 2 * m1, int(n_width/4) + 1, 0
-        m3, k3, p3 = 2 * m2, int(n_width/8) + 1, 0
-        self.debug  = True
-        self.conv1  = nn.Conv2d(n_depth, m1, k1, padding = p1)
-        self.bn1    = nn.BatchNorm2d(m1)
-        self.conv2  = nn.Conv2d(m1, m2, k2, padding = p2)
-        self.bn2    = nn.BatchNorm2d(m2)
-        self.conv3  = nn.Conv2d(m2, m3, k3, padding = p3)
-        self.bn3    = nn.BatchNorm2d(m3)
-        self.pool   = nn.MaxPool2d(2, 2)
-        self.smoid  = nn.Sigmoid()
-        n_out = n_width - (k1+k2+k3) + 2*(p1+p2+p2) + 3
-        self.fc0    = nn.Linear(n_out * n_out * m3, m2)
-        self.fc1    = nn.Linear(m2, 1)
+        chi          = depth * expansion
+        self.dropout = dropout_fraction > 0
+        self.conv1   = nn.Conv2d(depth, chi, kernel, padding = padding) 
+        self.bn1     = nn.BatchNorm2d(chi)
+        self.conv2   = nn.Conv2d(chi, chi*2, kernel, padding = padding)
+        self.bn2     = nn.BatchNorm2d(chi*2)
+        self.conv3   = nn.Conv2d(chi*2, chi*4, kernel, padding = padding)
+        self.bn3     = nn.BatchNorm2d(chi*4)
+        self.conv4   = nn.Conv2d(chi*4, chi*8, kernel, padding = padding)
+        self.bn4     = nn.BatchNorm2d(chi*8)
+        self.pool    = nn.MaxPool2d(pool, pool)
+        self.fc0     = nn.Linear(chi*8, noutput)
+        self.drop1   = nn.Dropout(p=dropout_fraction)
+        self.noutput = noutput
+        self.debug   = True
 
     def forward(self, x):
-        def _sshape(x):
-            si = str(x.size())[11: -1]
-            print(si)
-            return si
-        if (self.debug): s = 'CNN : \n   ' + _sshape(x) 
-        x = self.bn1(F.leaky_relu(self.conv1(x)))
-        if (self.debug): s = s + ' => ' + _sshape(x) 
-        x = self.bn2(F.leaky_relu(self.conv2(x)))
-        if (self.debug): s = s + ' => ' + _sshape(x) 
-        x = self.bn3(F.leaky_relu(self.conv3(x)))
-        if (self.debug): s = s + '=> ' + _sshape(x) 
+
+        if(self.debug) : print(f"input data shape =>{x.shape}")
+        # convolution (3x3) , reLU batch norm and MaxPool: (8,8,1) => (8,8,64)
+        x = self.pool(self.bn1(F.leaky_relu(self.conv1(x))))
+
+        if(self.debug) : print(f"conv 1 =>{x.shape}")
+        x = self.pool(self.bn2(F.leaky_relu(self.conv2(x))))
+        
+        if (self.debug) : print(f"conv 2 =>{x.shape}")
+        x = self.pool(self.bn3(F.leaky_relu(self.conv3(x))))
+        
+        if (self.debug) : print(f"conv 3 =>{x.shape}")
+        x = self.pool(self.bn4(F.leaky_relu(self.conv4(x))))
+        
+        if (self.debug) : print(f"conv 4 =>{x.shape}")
         x = x.flatten(start_dim=1)
-        if (self.debug): s = s + ' => ' + _sshape(x) 
-        #x = self.drop(x)
+        # Flatten
+
+        if (self.debug): print(f"lin input =>{x.shape}")
+        if self.dropout: x = self.drop1(x)  # drop
+        
         x = self.fc0(x)
-        if (self.debug): s = s + ' => ' + _sshape(x) + '\n'
-        x = self.smoid(self.fc1(x))
-        #x = self.fc1(x)
-        if (self.debug): s = s + ' => ' + _sshape(x) + '\n'
-        if (self.debug): print(s)
+        if (self.debug): print(f"lin 0 =>{x.shape}")
+
+        if (self.noutput == 1): 
+            x = torch.squeeze(x)
+            if (self.debug): print(f"lin 0 =>{x.shape}")
+
         self.debug = False
+
         return x
+
+class HCNN(nn.Module):
+    """
+    Defines a convolutional network with a basic architecture:
+    4 - Conv layers that increased the depth and decreasing width half-width kernel
+         convolution (HW kernel) , reLU batch norm,
+    2 - linear with drop drop (optional) 
+      - previous to last layer has 2-neurons for binnary classification
+      - last layer depends on the loss function: options 'sigmoid, softmax'
+      
+    """
+    def __init__(self, depth, width, kernel = 3, expansion = 2, padding = 1, dropout_fraction = 0.1, noutput = 2):
+        super().__init__()
+        chi          = depth * expansion
+        self.dropout = dropout_fraction > 0
+        
+        ikernel = lambda width: max(int(width/2), 2)
+        iwitdh  = lambda width, k: width - k + 2 * padding + 1
+
+        kernel = ikernel(width)
+        print('int conv : width = ', width)
+        print('1st conv : width = ', width, ', kernel = ', kernel)
+        self.conv1   = nn.Conv2d(depth, chi, kernel, padding = padding) 
+        self.bn1     = nn.BatchNorm2d(chi)
+        
+        width        = iwitdh(width, kernel)
+        kernel       = ikernel(width)
+        print('2nd conv : width = ', width, ', kernel = ', kernel)
+        self.conv2   = nn.Conv2d(chi, chi*2, kernel, padding = padding)
+        self.bn2     = nn.BatchNorm2d(chi*2)
+
+        width        = iwitdh(width, kernel)
+        kernel       = ikernel(width)
+        print('3rd conv : width = ', width, ', kernel = ', kernel)
+        self.conv3   = nn.Conv2d(chi*2, chi*4, kernel, padding = padding)
+        self.bn3     = nn.BatchNorm2d(chi*4)
+
+        width        = iwitdh(width, kernel)
+        kernel       = ikernel(width)
+        print('4th conv : width = ', width, ', kernel = ', kernel)
+        self.conv4   = nn.Conv2d(chi*4, chi*8, kernel, padding = padding)
+        self.bn4     = nn.BatchNorm2d(chi*8)
+
+        width        = iwitdh(width, kernel)
+        print('out conv : width = ', width)
+
+        self.fc0     = nn.Linear(chi*8 * (width * width), noutput)
+        #self.pool    = nn.MaxPool2d(pool, pool)
+        self.drop1   = nn.Dropout(p=dropout_fraction)
+        self.noutput = noutput
+        self.debug   = True
+
+    def forward(self, x):
+
+        if(self.debug) : print(f"input data shape =>{x.shape}")
+        # convolution (3x3) , reLU batch norm and MaxPool: (8,8,1) => (8,8,64)
+        x = self.bn1(F.leaky_relu(self.conv1(x)))
+
+        if(self.debug) : print(f"conv 1 =>{x.shape}")
+        x = self.bn2(F.leaky_relu(self.conv2(x)))
+        
+        if (self.debug) : print(f"conv 2 =>{x.shape}")
+        x = self.bn3(F.leaky_relu(self.conv3(x)))
+        
+        if (self.debug) : print(f"conv 3 =>{x.shape}")
+        x = self.bn4(F.leaky_relu(self.conv4(x)))
+        
+        if (self.debug) : print(f"conv 4 =>{x.shape}")
+        x = x.flatten(start_dim=1)
+        # Flatten
+
+        if (self.debug): print(f"lin input =>{x.shape}")
+        if self.dropout: x = self.drop1(x)  # drop
+        
+        x = self.fc0(x)
+        if (self.debug): print(f"lin 0 =>{x.shape}")
+
+        if (self.noutput == 1): 
+            x = torch.squeeze(x)
+            if (self.debug): print(f"lin 0 =>{x.shape}")
+
+        self.debug = False
+
+        return x
+
+
+class HKCNN(nn.Module):
+    """
+    Defines a convolutional network with a basic architecture:
+    4 - Conv layers that increased the depth and decreasing width half-width kernel
+         convolution (HW kernel) , reLU batch norm,
+    2 - linear with drop drop (optional) 
+      - previous to last layer has 2-neurons for binnary classification
+      - last layer depends on the loss function: options 'sigmoid, softmax'
+      
+    """
+    def __init__(self, depth, width, kernel = 3, expansion = 2, padding = 1, dropout_fraction = 0.1, noutput = 2):
+        super().__init__()
+        chi          = depth * expansion
+        self.dropout = dropout_fraction > 0
+        
+        ikernel = lambda width: max(int(width/2), 2)
+        iwitdh  = lambda width, k: width - k + 2 * padding + 1
+
+        kernel = ikernel(width)
+        print('int conv : width = ', width)
+        print('1st conv : width = ', width, ', kernel = ', kernel)
+        self.conv1   = nn.Conv2d(depth, chi, kernel, padding = padding) 
+        self.bn1     = nn.BatchNorm2d(chi)
+        
+        width        = iwitdh(width, kernel)
+        kernel       = 3
+        print('2nd conv : width = ', width, ', kernel = ', kernel)
+        self.conv2   = nn.Conv2d(chi, chi*2, kernel, padding = padding)
+        self.bn2     = nn.BatchNorm2d(chi*2)
+
+        width        = iwitdh(width, kernel)
+        print('3rd conv : width = ', width, ', kernel = ', kernel)
+        self.conv3   = nn.Conv2d(chi*2, chi*4, kernel, padding = padding)
+        self.bn3     = nn.BatchNorm2d(chi*4)
+
+        width        = iwitdh(width, kernel)
+        print('4th conv : width = ', width, ', kernel = ', kernel)
+        self.conv4   = nn.Conv2d(chi*4, chi*8, kernel, padding = padding)
+        self.bn4     = nn.BatchNorm2d(chi*8)
+
+        width        = iwitdh(width, kernel)
+        print('out conv : width = ', width)
+
+        self.fc0     = nn.Linear(chi*8 * (width * width), noutput)
+        
+        pool         = 2
+        self.pool    = nn.MaxPool2d(pool, pool)
+        self.drop1   = nn.Dropout(p=dropout_fraction)
+        self.noutput = noutput
+        self.debug   = True
+
+    def forward(self, x):
+
+        if(self.debug) : print(f"input data shape =>{x.shape}")
+        # convolution (3x3) , reLU batch norm and MaxPool: (8,8,1) => (8,8,64)
+        x = self.bn1(F.leaky_relu(self.conv1(x)))
+
+        if(self.debug) : print(f"conv 1 =>{x.shape}")
+        x = self.pool(self.bn2(F.leaky_relu(self.conv2(x))))
+        
+        if (self.debug) : print(f"conv 2 =>{x.shape}")
+        x = self.pool(self.bn3(F.leaky_relu(self.conv3(x))))
+        
+        if (self.debug) : print(f"conv 3 =>{x.shape}")
+        x = self.pool(self.bn4(F.leaky_relu(self.conv4(x))))
+        
+        if (self.debug) : print(f"conv 4 =>{x.shape}")
+        x = x.flatten(start_dim=1)
+        # Flatten
+
+        if (self.debug): print(f"lin input =>{x.shape}")
+        if self.dropout: x = self.drop1(x)  # drop
+        
+        x = self.fc0(x)
+        if (self.debug): print(f"lin 0 =>{x.shape}")
+
+        if (self.noutput == 1): 
+            x = torch.squeeze(x)
+            if (self.debug): print(f"lin 0 =>{x.shape}")
+
+        self.debug = False
+
+        return x
+
+
+def conv_dimensiones(width, depth, filters = 3, kernel = 3, stride = 1, padding = 0, pool = 1):
+
+        depth = filters * depth
+        width = ((width - kernel + 2 * padding)/stride + 1)/pool
+        return width, depth
+
+
+# class TestGoCNN(nn.Module):
+#     """ A simple binary classification CNN starting from a (n_width, n_widht, n_depth) 
+#     """
+
+#     # WARNING: you always have to set a layer in the self!
+#     def __init__(self, depth, width, kmax = 20, kfactor = 2, padding = 0):
+#         super().__init__()
+    
+#         self.debug = True
+#         self.flow  = []
+
+#         def _add_next_conv(m, n, i):
+#             k = max(min(int(n/kfactor) + 1, kmax), 2)
+#             m0, n0 = m, n
+#             m, n   = kfactor * m, n - k + 1
+#             i      = i +1
+#             if (n <= 0): return m0, n0, i, True
+#             conv = nn.Conv2d(m0, m, k, padding = padding)
+#             bn   = nn.BatchNorm2d(m)
+#             setattr(self, 'conv'+str(i), conv)
+#             setattr(self, 'bn'+str(i), bn)
+#             self.flow.append(conv)
+#             self.flow.append(F.leaky_relu)
+#             self.flow.append(bn)
+#             print('conv : ', i, ' init ', (m0, n0), ', next ', (m, n), ', kernel ', k)
+#             return m, n, i, False
+
+#         # convolutions
+#         m, n, i, stop = depth, width, 0, False
+#         while not stop:
+#             m, n, i, stop = _add_next_conv(m, n, i)
+
+#         # linear
+#         ndim1 = m * n * n
+#         ndim2 = max(kfactor * depth, 2)
+#         print('lin  : init ', ndim1, ', next', ndim2, ', next ', 1)
+#         flat  = lambda x : x.flatten(start_dim = 1)
+#         fc1   = nn.Linear(ndim1, ndim2)
+#         setattr(self, 'fc1', fc1)
+#         fc2   = nn.Linear(ndim2, 1)
+#         setattr(self, 'fc1', fc2)
+#         smoid  = nn.Sigmoid()
+#         self.flow.append(flat)
+#         self.flow.append(fc1)
+#         self.flow.append(fc2)
+#         self.flow.append(smoid)
+
+#     def forward(self, x):
+
+#         def _sshape(x):
+#             si = str(x.size())[11: -1] + '-> '
+#             return si
+#         #if (self.debug): s = 'CNN: ' + _sshape(x)
+#         for op in self.flow:
+#             #if (self.debug):  s = s + _sshape(x)
+#             x = op(x)
+
+#         #if (self.debug):
+#         #    print(s)
+#         #    self.debug = False
+#         return x
+
+
+# class GoCNN(nn.Module):
+#     """ A simple binary classification CNN starting from a (n_width, n_widht, n_depth) 
+#     """
+
+#     def __init__(self, n_depth, n_width):
+#         super().__init__()
+#         m1, k1, p1 = 2 * n_depth, int(n_width/2)+1, 0
+#         m2, k2, p2 = 2 * m1, int(n_width/4) + 1, 0
+#         m3, k3, p3 = 2 * m2, int(n_width/8) + 1, 0
+#         self.debug  = True
+#         self.conv1  = nn.Conv2d(n_depth, m1, k1, padding = p1)
+#         self.bn1    = nn.BatchNorm2d(m1)
+#         self.conv2  = nn.Conv2d(m1, m2, k2, padding = p2)
+#         self.bn2    = nn.BatchNorm2d(m2)
+#         self.conv3  = nn.Conv2d(m2, m3, k3, padding = p3)
+#         self.bn3    = nn.BatchNorm2d(m3)
+#         self.pool   = nn.MaxPool2d(2, 2)
+#         self.smoid  = nn.Sigmoid()
+#         n_out = n_width - (k1+k2+k3) + 2*(p1+p2+p2) + 3
+#         self.fc0    = nn.Linear(n_out * n_out * m3, m2)
+#         self.fc1    = nn.Linear(m2, 1)
+
+#     def forward(self, x):
+#         def _sshape(x):
+#             si = str(x.size())[11: -1]
+#             print(si)
+#             return si
+#         if (self.debug): s = 'CNN : \n   ' + _sshape(x) 
+#         x = self.bn1(F.leaky_relu(self.conv1(x)))
+#         if (self.debug): s = s + ' => ' + _sshape(x) 
+#         x = self.bn2(F.leaky_relu(self.conv2(x)))
+#         if (self.debug): s = s + ' => ' + _sshape(x) 
+#         x = self.bn3(F.leaky_relu(self.conv3(x)))
+#         if (self.debug): s = s + '=> ' + _sshape(x) 
+#         x = x.flatten(start_dim=1)
+#         if (self.debug): s = s + ' => ' + _sshape(x) 
+#         #x = self.drop(x)
+#         x = self.fc0(x)
+#         if (self.debug): s = s + ' => ' + _sshape(x) + '\n'
+#         x = self.smoid(self.fc1(x))
+#         #x = self.fc1(x)
+#         if (self.debug): s = s + ' => ' + _sshape(x) + '\n'
+#         if (self.debug): print(s)
+#         self.debug = False
+#         return x
 
 
 #--------------------
-# Fit
+# CNN Fit
 #---------------------
 
-# PyTourch Energy loss (Mean Squared Error and Binary Cross Entropy)
-#nn_loss_mse  = nn.MSELoss()
-#nn_loss_bce  = nn.BCELoss()
+config = {'loss_function' : 'MSELoss',
+          'learning_rate' : 0.001} # default 0.001
+
+
+loss_functions = {'MSELoss' : nn.MSELoss(),    # regression (chi2)
+                  'BCELoss' : nn.BCELoss(),    # Binary classification (output must be 0-1)
+                  'CrossEntropyLoss'  : nn.CrossEntropyLoss()  # n-classification
+                  }
+                  #'chi2'    : chi2_loss}
+
 
 def chi2_loss(ys_pred, ys):
     squared_diffs = (ys_pred - ys) ** 2
     return squared_diffs.mean()
-
-loss_functions = {'MSELoss' : nn.MSELoss(),
-                  'BCELoss' : nn.BCELoss(),
-                  'CELoss'  : nn.CrossEntropyLoss(), 
-                  'chi2'    : chi2_loss}
-
-#loss_function = chi2_loss # Original CNN
-#loss_function = nn_loss_mse
 
 def in_cuda(x):
     if torch.cuda.is_available():
@@ -404,27 +496,32 @@ def in_cuda(x):
         return x
     return x
 
+def to_numpy(y):
+    if torch.cuda.is_available():
+        y = y.detach().cpu().numpy()
+        return y
+    return y.numpy()
+
 
 def _training(model, optimizer, train, loss_function):
     losses = []
+    model.train()
     for xs, ys in train:
-        xs = in_cuda(xs)
-        ys = in_cuda(ys)
-        model.train()
-        optimizer.zero_grad()
+        xs, ys = in_cuda(xs), in_cuda(ys)
         ys_pred = model(xs)
         loss    = loss_function(ys_pred, ys)
         loss.backward()
         optimizer.step()
+        optimizer.zero_grad()
         losses.append(loss.data.item())
     return losses
 
 def _validation(model, val, loss_function):
     losses = []
+    model.eval()
     with torch.no_grad():
-        model.eval()
         for xs, ys in val:
-            xs, ys = in_cuda(xs), in_cuda(ys)
+            xs, ys  = in_cuda(xs), in_cuda(ys)
             ys_pred = model(xs)
             loss    = loss_function(ys_pred, ys)
             losses.append(loss.data.item())
@@ -437,135 +534,186 @@ def _epoch(model, optimizer, train, val, loss_function):
     losses_val   = _validation(model, val, loss_function)
 
     _sum = lambda x: (np.mean(x), np.std(x))
+    sum  = (_sum(losses_train), _sum(losses_val))
+    acc  = (accuracy(model, train), accuracy(model, val))
 
-    sum =  (_sum(losses_train), _sum(losses_val))
+    print('Epoch:  loss train {:1.2e} +- {:1.2e}  validation {:1.2e} +- {:1.2e}'.format(*sum[0], *sum[1]))
+    print('        accuracy train {:4.3f} validation {:4.3f}'.format(*acc))
 
-    print('Epoch:  train {:1.2e} +- {:1.2e}  validation {:1.2e} +- {:1.2e}'.format(*sum[0], *sum[1]))
-    return sum 
+    return sum, acc
+
 
 def train_model(model, optimizer, train, val, loss_function, nepochs = 20):
 
-    sums = [_epoch(model, optimizer, train, val, loss_function) for i in range(nepochs)]
-    return sums
+    model.train()
+    losses, accus = [], []
+    for i in range(nepochs):
+        loss, acc = _epoch(model, optimizer, train, val, loss_function)
+        losses.append(loss)
+        accus .append(acc)
+
+    return losses, accus
     
 
 #---------------------
 # Prediction
 #-----------------------
 
-def prediction(model, test):
+def prediction_scale(digits):
+    """ from the output of the NN returns an scalar
+    """
+    ddim = digits.shape
+    if (len(ddim) == 1): return digits
+    if ddim[-1] == 2:
+        zs = nn.functional.softmax(digits, dim = 1)
+        return zs[:, 1]
+    return digits
+
+def prediction_class(digits, y0 = 0.5):
+    """ from the output of the NN returns 0,1 for the 2 classes
+    """
+    yscale = prediction_scale(digits)
+    return yscale > y0
+    
+def prediction(model, test, type = 'scale'):
+    _prediction = prediction_class if type == 'class' else prediction_scale
     with torch.no_grad():
         model.eval()
         for xs, ys in test:
-            xs, ys = in_cuda(xs), in_cuda(ys)
-            ys_pred = model(xs)
-    return ys.numpy(), ys_pred.numpy()
+            xs, ys  = in_cuda(xs), in_cuda(ys)
+            ys_pred = _prediction(model(xs))
+    return to_numpy(ys), to_numpy(ys_pred)
 
+def accuracy(model, val):
+    ys, yps   = prediction(model, val, 'class')
+    acc       = np.sum(ys == yps)/len(ys)
+    return acc
 
-#-------------
+#===========================
 # Run
-#-------------
+#===========================
+
+def device():
+    dev = ("cuda" if torch.cuda.is_available()
+           else "mps" if torch.backends.mps.is_available()
+           else "cpu")
+    
+    print(f"Using {dev} device ")
+    return dev
 
 
-config = {'loss_function' : 'chi2'}
+def run(dataset, model, nepochs = 10, ofilename = '', config = config):
 
-def run(dataset, nepochs = 10, ofilename = '', config = config):
-
-    NNType = TestGoCNN
     print(dataset)
-
     print(config)
     loss_function = loss_functions[config['loss_function']]
+    learning_rate = config['learning_rate']
 
     train, test, val, index = subsets(dataset)
-    assert len(dataset.xs.shape) == 4
-    n_depth, n_width, _ = dataset.xs[0].shape
-    print('Event Image tensor ', dataset.xs[0].shape)
+    assert len(dataset.x.shape) == 4
+    print('Event Image sample : ', dataset.x.shape)
 
-    model     = NNType(n_depth, n_width)
-    model     = in_cuda(model)
-    learning_rate = 0.001 # default (tested 0.01, 0.0001 with no improvements)
+    device()
+    #model  = model.to(dev)
+    model  = in_cuda(model)
+    print(model)
+    ok =  torch.cuda.is_available()
+    print(f"Is CUDA avialable? {ok} ")
+
     optimizer = optim.Adam(model.parameters(), lr = learning_rate)
-    epochs    = train_model(model, optimizer, train, val, loss_function, nepochs = nepochs)
-
-    ys, yps   = prediction(model, test)
-    ybin      = yps >= 0.5
-    acc       = 100.*np.sum(ys == ybin)/len(ys)
-    print('Test  accuracy {:4.2f}'.format(acc))
+    losses, accus = train_model(model, optimizer, train, val, loss_function, nepochs = nepochs)
+    ys, yps       = prediction(model, test)
 
     if (ofilename != ''):
         print('save cnn results at ', ofilename)
-        np.savez(ofilename, epochs = epochs, index = index, y = ys, yp = yps)
+        np.savez(ofilename, losses = losses, accuracies = accus, index = index, y = ys, yp = yps)
 
-    return GoCNNBox(model, dataset, epochs, index, ys, yps)
+    return CNNResult(model, dataset, losses, accus, index, ys, yps)
 
 #---------------------
 # Production
 #---------------------
 
-def get_dset(labels):
-    """ select Dataset depending on the labels
-    1) data-set with labels: esum, emean, emax, ecount, zmean
-    2) data-set with mc-image labels: seg, ext
-    3) data-set with test-images labels: test
-    """
-    Dset    = GoDataset
-    if 'seg' in labels:
-        Dset = GoDatasetInv
-    elif 'test' in labels:
-        Dset = GoDatasetTest
-    return Dset
+def cnn_config_name(cnnname, config):
 
-def get_cnn_filenames(pressure, projection, widths, labels, cnn_name = 'cnn_', img_name = 'xymm_'):
+    labels    = config['labels']
+    expansion = 'f'+str(int(config['expansion']))
+    nepochs   = 'e'+str(int(config['nepochs']))
+    eloss     = str(config['loss_function'])
+
+    slabels = ut.str_concatenate(labels, '+')
+    sconfig = ut.str_concatenate((expansion, nepochs), '')
+    if config['black']: sconfig += 'B'
+    if config['img_scale'] != 1:
+        sconfig += 'F'+str(int(config['img_scale']))
+
+    ss = ut.str_concatenate((cnnname, slabels, sconfig, eloss),'_')
+
+    return ss
+
+
+def filename_cnn(ifilename, config):
     """ return the formated data files for cnn-input and cnn-output
     """
-    frame  = dp.frames[pressure]
-    ifile  = dp.xymm_filename(projection, widths, frame, img_name + pressure)
-    ofile  = dp.prepend_filename(ifile, cnn_name + dp.str_concatenate(labels, '+'))
-    #print('input file  : ', ifile)
-    #print('output file : ', ofile)
-    return ifile, ofile
+    fname   = ifilename.split('.')[0]
+    cnnname = config['cnnname']
+    sname   = cnn_config_name(cnnname, config)
+    ofile   = ut.str_concatenate((fname, sname)) +  '.npz'
+    return ofile
+
+def production(ifile, ofile, config):
     
-def production(ipath, opath, pressure, projection, widths, labels, cnn_name = 'cnn_', img_name = 'xymm_', nepochs = 20, config = config):
-    """ run a cnn over the input and store the output, returns the cnn-data and results, and the input and output filenames
-    """
+    print('input file  : ', ifile)
+    print('output file : ', ofile)
+    print('config      : ', config)
 
-    ifile, ofile = get_cnn_filenames(pressure, projection, widths, labels, cnn_name, img_name)
-    print('input file  : ', ipath + ifile)
-    print('output file : ', opath + ofile)
-    Dset    = get_dset(labels)
-    idata   = Dset(ipath + ifile, labels)
-    box     = run(idata, ofilename = opath + ofile, nepochs = nepochs, config = config)
-    #rejection  = 0.95
-    #efficiency = roc_value(box.y, box.yp, rejection)[1]
-    #print('efficiency {:2.1f}% at {:2.1f}% rejection'.format(100.*efficiency, 100*rejection))
-    odata     =  np.load(opath + ofile)
-    return (idata, odata)
+    labels    = config['labels']
+    black     = config['black']
+    img_scale = config['img_scale']
+    print('loading data ', ifile)
+    idata  = GoDataset(ifile, labels, black = black, img_scale = img_scale)
+    print('Input shape ', idata.x.shape)
+ 
+    expansion = config['expansion']
+    nepochs   = config['nepochs']
+    cnnname   = config['cnnname']
+    CNN       = HCNN if cnnname == 'HCNN' else HKCNN if cnnname == 'HKCNN' else KCNN
+    padding   = 0    if cnnname == 'HCNN' else 1
 
-def retrieve_cnn_data(ipath, opath, pressure, projection, widths, labels, cnn_name = 'cnn_'):
-    """ retrieve the input and output data of a cnn (after the cnn has run)
-    """
-    ifile, ofile = get_cnn_filenames(pressure, projection, widths, labels, cnn_name)
-    dset  = get_dset(labels)
-    print('data file : ', ipath + ifile)
-    idata = dset(ipath + ifile, labels)
-    print('cnn file  :', opath + ofile)
-    odata = np.load(opath + ofile)
-    return idata, odata
+    _, depth, width, _ = idata.x.shape
+    print('CNN model ', cnnname)
+    kernel = 3
+    print('configurate cnn (kernel, expansion, padding)', kernel, expansion, padding)
+    kcnn = CNN(depth, width, expansion = expansion, kernel = kernel, padding = padding)
+    print('run cnn (epochs) ', nepochs)
+    rcnn = run(idata, kcnn, ofilename = ofile, nepochs = nepochs, config = config)
+    return rcnn 
 
 
 #--------------------
 # Plot
 #--------------------
 
-def plot_epochs(epochs):
-    us  = [sum[0][0] for sum in epochs]
-    eus = [sum[0][1] for sum in epochs]
-    vs  = [sum[1][0] for sum in epochs]
-    evs = [sum[1][1] for sum in epochs]
+def plot_epochs(losses, accus):
+    plt.figure()
+    plt.subplot(2, 2, 1)
+    us  = [sum[0][0] for sum in losses]
+    eus = [sum[0][1] for sum in losses]
+    vs  = [sum[1][0] for sum in losses]
+    evs = [sum[1][1] for sum in losses]
     plt.errorbar(range(len(us)), us, yerr = eus, alpha = 0.5, label = "train")
-    plt.errorbar(0.1+np.arange(len(vs)), vs, yerr = evs, alpha = 0.5, label = "val")
+    plt.errorbar(0.1+np.arange(len(vs)), vs, yerr = evs, alpha = 0.5, label = "validation")
     plt.xlabel("epoch"); plt.ylabel("loss"); plt.legend();
+    plt.subplot(2, 2, 2)
+    us  = [acc[0] for acc in accus]
+    vs  = [acc[1] for acc in accus]
+    plt.plot(range(len(us)), us, label = 'train')
+    plt.plot(range(len(vs)), vs, label = 'validation')
+    plt.xlabel("epoch"); plt.ylabel("accuracy"); plt.legend();
+    plt.tight_layout()
+    return 
+
+
 
 def plot_roc(ys, ysp, zoom = 0.5):
     plt.figure()
@@ -580,6 +728,7 @@ def plot_roc(ys, ysp, zoom = 0.5):
     plt.xlim((zoom, 1.))
     plt.xlabel('rejection'); plt.ylabel("efficiency"); 
     plt.tight_layout()
+
 
 def plot_event(idata, odata, labels, zlabels = [], ievt = -1):
     i0   = odata['index'][0]
@@ -624,8 +773,12 @@ def roc_value(y, yp, epsilon = 0.9):
     seff  = np.sum(yp[y==1] >= yp0)/len(yp[y==1])
     return yp0, seff
 
-def false_positives_indices(y, yp, yp0, index0 = 0):
+def false_positives_indices(y, yp, yp0 = 0.95, index0 = 0):
     ids = index0 + np.argwhere(np.logical_and(y == 0, yp >= yp0)).flatten()
+    return ids
+
+def false_negatives_indices(y, yp, yp0 = 0.05, index0 = 0):
+    ids = index0 + np.argwhere(np.logical_and(y == 1, yp <= yp0)).flatten()
     return ids
 
 
@@ -676,35 +829,36 @@ def test_box_save(box, ofile):
     return True
 
 
-def test(ifilename):
+test_xlabel = ['xy_E_sum']
+test_zlabel = ['zy_segclass_mean']
+
+def test(ifilename, xlabels = test_xlabel, zlabels = test_zlabel):
 
     print('input filename ', ifilename)
     ofilename = dp.prepend_filename(ifilename, 'test_cnn')
     print('output filename ', ofilename)
 
     print('--- data set ---')
-    labels = ['esum', 'emax', 'ecount']
-    test_godataset(ifilename, labels)
-    dset = GoDataset(ifilename, labels)
+    test_godataset(ifilename, xlabels)
+    dset = GoDataset(ifilename, xlabels)
     box  = run(dset, ofilename = ofilename, nepochs = 4)
     test_box_index(box)
     test_box_save(box, ofilename)
 
     print('--- data set inv ---')
-    labels = ['seg', 'ext']
-    test_godataset(ifilename, labels, GoDatasetInv)
-    dset = GoDatasetInv(ifilename, labels)
+    test_godataset(ifilename, xlabels, GoDatasetInv)
+    dset = GoDatasetInv(ifilename, zlabels)
     box  = run(dset, ofilename = ofilename, nepochs = 4)
     test_box_index(box)
     test_box_save(box, ofilename)
 
-    print('--- data set test ---')
-    labels = ['test']
-    #test_godataset(ifilename, labels, GoDatasetTest)
-    dset = GoDatasetTest(ifilename, labels)
-    box  = run(dset, ofilename = ofilename, nepochs = 4)
-    test_box_index(box)
-    test_box_save(box, ofilename)
+    # print('--- data set test ---')
+    # labels = ['test']
+    # #test_godataset(ifilename, labels, GoDatasetTest)
+    # dset = GoDatasetTest(ifilename, labels)
+    # box  = run(dset, ofilename = ofilename, nepochs = 4)
+    # test_box_index(box)
+    # test_box_save(box, ofilename)
 
 #    print('input filename ', ifilename_xyz)
 #    ofilename = dp.prepend_filename(ifilename_xyz, 'test_cnn')

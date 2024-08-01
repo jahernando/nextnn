@@ -172,15 +172,16 @@ def val_in_frame(coors, val, bins, sel, statistic = 'max'):
     np.nan_to_num(xval, 0)
     return xval
 
-def diff_ievoxel(evt, width0, sigma, width1):
+
+def evt_diff_ievoxel(evt, width0, sigma, width1):
 
     def _segclass(seg):
         _seg  = np.array([2, 1, 3])
         return [_seg[x] for x in seg]
 
-    def _isegclass(seg):
-        _iseg  = np.array([-1, 1, 0, 2])
-        return [_iseg[x] for x in seg]
+    #def _isegclass(seg):
+    #    _iseg  = np.array([-1, 1, 0, 2])
+    #    return [_iseg[x] for x in seg]
 
     labels = ('x', 'y', 'z')
     pos      = [evt[label].values for label in labels]
@@ -195,7 +196,7 @@ def diff_ievoxel(evt, width0, sigma, width1):
     xpos, xene, bins, sel = voxelize(ie_pos, ie_ene, width1)
     xnielectron     = val_in_frame(xpos, xene, bins, sel, 'count').astype(int)
     xsegclass       = val_in_frame(pos, segclass, bins, sel).astype(int)
-    xsegclass       = _isegclass(xsegclass)
+    #xsegclass       = _isegclass(xsegclass)
     xext            = val_in_frame(pos, ext, bins, sel).astype(int)
     xtrkid          = val_in_frame(pos, trkid, bins, sel, 'min').astype(int) - 1
     xnhits          = val_in_frame(pos, nhits, bins, sel, 'sum').astype(int)
@@ -274,11 +275,10 @@ def run(ifilename, ofilename, width0, sigma, width1, use_df = True,
 #  Plot
 #-----------
 
-def plot_event(df, varname = 'E', scatter = False, seg = -1, ext = -1,  bins = None):
+def plot_event(df, varname = 'E', scatter = False, seg = -1, ext = -1,  bins = None, width = 2.):
     marker = '.'; mcolor = 'black'
     cmap   = 'cool' # spring, autumn, binary
     x, y, z, ene = [df[label].values for label in ('x', 'y', 'z', varname)]
-    width = 2.
     if bins == None:
         bins = [np.arange(np.min(xi) - 2 * width, np.max(xi) + 2 * width, width) for xi in (x, y, z)]
     def _plot(x, y, bins):

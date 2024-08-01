@@ -1,49 +1,63 @@
 
 import xyimg.dataprep as dp
+import xyimg.utils    as ut
 import os
 import argparse
 
 path  = os.environ["LPRDATADIR"]
-opath = path+'xymm/'
+opath = path+'shots/'
 
 
-def production(pressure, projection, widths, frame, labels, nevents = -1):
-    ofiles = []
-    for sample in ('0nubb', '1eroi'):
-        ifile = path + dp.voxel_filename(pressure, sample)
-        ofile = path + sample+'_'+str(pressure)
-        #if (nevents >0): ofile += ofile + '_' + str(int(nevents)) + 'events_test'
-        dp.run(ifile, ofile, projection, widths = widths, frame = frame, labels = labels, nevents = nevents)
-        ofiles.append(dp.xymm_filename(projection, widths, frame, prefix = ofile))
-    ofile = dp.xymm_filename(projection, widths, frame, prefix = opath+'xymm_'+str(pressure))
-    dp.mix_godata(*ofiles, ofile.split('.')[0])
-    for ofile in ofiles: os.remove(ofile)
+frames    = {'5bar' : 160, '13bar': 80, '20bar' : 40}
+
+pressure  = '5bar'
+sample    = '1eroi'
+hit_width = 0 # mm
+sigma     = 0 # mm
+width     = 10 # mm
+xlabel    = ('xy_E_sum', 'xy_z_mean', 'yz_E_sum', 'yz_x_mean', 'zx_E_sum', 'zx_y_mean')
+zlabel    = ('xy_segclass_max', 'xy_ext_max', 'yz_segclass_max', 'yz_ext_max', 'zx_segclass_max', 'zx_ext_max')
+nevents   = 100
+
+def _ofile(pressure, sample, hit_width, sigma, width):
+    ofile = 'shots/' + ut.str_concatenate((pressure, sample, 'h'+str(int(hit_width))+'mm',
+                                           's'+str(int(sigma))+'mm', 'w'+str(int(width))+'mm'))+'.npz'
+    print(ofile)
+    return ofile
+
+def production(pressure, sample, hit_width, width, sigma, nevents = -1):
+    ifile = path + dp.filename_voxel(pressure, sample)
+    ofile = path + _ofile(pressure, sample, hit_width, sigma, width)
+    frame = frames[pressure]
+    hit_width = (hit_width, hit_width, hit_width)
+    sigma     = (sigma, sigma, sigma)
+    width     = (width, width, width)
+    dp.run(ifilename = ifile, 
+           ofilename = ofile,
+           hit_width = hit_width,
+           sigma     = sigma,
+           width     = width,
+           frame     = frame,
+           xlabel    = xlabel,
+           zlabel    = zlabel,
+           nevents   = nevents)
     return True
 
 
 #--- parser
 
-pressure = '13bar'
-coors    = ('x', 'y')
-widths   = (10, 10)
-labels   = ['esum', 'ecount', 'emax', 'emean', 'zmean'] 
-nevents  = 10
 
+parser = argparse.ArgumentParser(description='from voxels to images vis detsim')
 
-parser = argparse.ArgumentParser(description='img data preparation: from voxels to imgs')
+parser.add_argument('-pressure', type = str, help = "pressure, i.e '13bar'", default = pressure)
 
-parser.add_argument('-pressure', type = str, help ="pressure, i.e '13bar'", default = pressure)
+parser.add_argument('-sample', type = str, help = "sample, ile, '1eroi', '0nubb' ", default = sample)
 
-parser.add_argument('-projection', metavar = 'N', type = str, nargs = '+',
-                     help = "projections, i.e ('x', 'y')", default = coors)
+parser.add_argument('-hit_width', type = float, help = "hit_width  ", default = hit_width)
 
-parser.add_argument('-widths', metavar = 'N', type = int, nargs = '+',
-                     help = "bin widths, i.e (10, 10)", default = widths)
+parser.add_argument('-sigma', type = float, help = "sigma - normal diffusion ", default = sigma)
 
-#parser.add_argument('-frame', type = int, help ="frame size (int)", default=frame)
-
-parser.add_argument('-labels', metavar = 'N', type = str, nargs='+',
-                    help = "list of images, i.e 'esum', 'emax'", default= labels)
+parser.add_argument('-width', type = float, help = "width - image pixel size ", default = width)
 
 parser.add_argument('-events', type = int, help="number of events, (all -1)", default = nevents)
                     
@@ -56,8 +70,8 @@ print('args : ', args)
 frame = dp.frames[args.pressure]
 
 production(pressure   = args.pressure, 
-           projection = args.projection,
-           widths     = args.widths,
-           frame      = frame,
-           labels     = args.labels,
+           sample     = args.sample,
+           hit_width  = args.hit_width,
+           sigma      = args.sigma,
+           width      = args.width,
            nevents    = args.events)
