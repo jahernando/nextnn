@@ -61,8 +61,6 @@ def evt_iter(gs, nevents = -1, shuffle = False):
         yield key, data
 
 
-
-
 #-----------
 #   Algorithms
 #-----------
@@ -73,6 +71,10 @@ def coors(df, labels = ('x', 'y', 'z')):
     return [df[label].values for label in labels]
 
 track_id = 0
+
+def evt_coors(evt):
+    return [evt[x].values for x in coor_labels]
+
 
 def evt_preparation(evt      : pd.DataFrame,
                     track_id : int = track_id) -> pd.DataFrame:
@@ -109,22 +111,51 @@ def evt_preparation(evt      : pd.DataFrame,
 
 def test_evt_preparation(evt, track_id = track_id):
 
-    xevt = evt_preparation(evt, track_id)
     sel  = evt.track_id == 0
-    ys, xs = coors(xevt), coors(evt)
-    x0s    = [np.mean(x) for x in coors(evt[sel])]
-    diffs = [yi - xi + xi0 for yi, xi, xi0 in zip(ys, xs, x0s)] 
-    assert np.all(np.isclose(diffs, 0.))
+    xs   = evt_coors(evt[sel])
+    xs   = [np.mean(x) for x in xs]
+    assert np.all(np.isclose(xs, 0.))
 
-    segs = xevt.segclass.unique()
+    segs = evt.segclass.unique()
     for i in (1, 2, 3): assert (i in segs)
     
-    ext  = xevt.ext.unique()
+    ext  = evt.ext.unique()
     for i in (1, 2, 3): assert (i in ext)
 
-    assert len(evt) == len(xevt)
-
     return True
+
+
+def evt_image(df    : pd.DataFrame, 
+              label : list[str],
+              width : float = 5,
+              frame : float = 100,
+              bins  : int = -1) -> np.array:
+    """ 
+    """
+    # define the bins if the client has not defined
+    if (bins == -1):
+        bins = [np.arange(-frame - w, frame + w, w) for w in (width, width, width)]
+
+    dbins = {}
+    for xvar, bin in zip(coor_labels, bins): dbins[xvar] = bin
+        
+    # create a image of a label (if label == 'E' normalize to the total event)
+    # the label has tree words separared by '_' i.e 'xy_E_sum', in general 'projection_var_statistic'
+    #   xy: inficates the projections
+    #   E:  indicates the variable
+    #   sum: indicates the statistics
+    def _img(df, ilabel):
+        projection, varname, statistic = ilabel.split('_') 
+        xcoors     = [df[xvar].values for xvar in projection]
+        xbins      = [dbins[xvar]     for xvar in projection]
+        var        = df[varname].values
+        img , _, _ = stats.binned_statistic_dd(xcoors, var,  bins = xbins, statistic = statistic)
+        img        = np.nan_to_num(img, 0) 
+        return img
+
+    x       = np.array([_img(df, ilabel) for ilabel in label])
+    return x
+
 
 #---- ----
 # RUN
@@ -197,3 +228,15 @@ def run(ifilename,
     print('done!')
 
     return
+
+#-----------------------
+# Plots
+#------------------------
+
+def scatter_evt(evt, var, title = '', alpha = 0.1):
+    color = var
+    plt.figure(); plt.title(title)
+    plt.subplot(2, 2, 1); plt.scatter(evt.x, evt.y, c = color, alpha = alpha); plt.colorbar(); plt.xlabel('x'); plt.ylabel('y'); plt.title(title)
+    plt.subplot(2, 2, 2); plt.scatter(evt.y, evt.z, c = color, alpha = alpha); plt.colorbar(); plt.xlabel('y'); plt.ylabel('z'); plt.title(title)
+    plt.subplot(2, 2, 3); plt.scatter(evt.z, evt.x, c = color, alpha = alpha); plt.colorbar(); plt.xlabel('z'); plt.ylabel('z'); plt.title(title)
+    plt.tight_layout()
