@@ -46,66 +46,66 @@ class ImgDataset(Dataset):
         return xi, yi
 
 
-def _xs(dic, labels):
-    """ select from the dictionary the list of arrays with labels with m-size
-        and convert them into a numpy array with first dimension has m-size.
-    """
-    xs = np.array([dic[label] for label in labels])
-    xs = np.swapaxes(xs, 0, 1)
-    return xs
+# def _xs(dic, labels):
+#     """ select from the dictionary the list of arrays with labels with m-size
+#         and convert them into a numpy array with first dimension has m-size.
+#     """
+#     xs = np.array([dic[label] for label in labels])
+#     xs = np.swapaxes(xs, 0, 1)
+#     return xs
 
 
-class GoDataset(Dataset):
+# class GoDataset(Dataset):
 
-    def __init__(self, filename, labels, black = False, img_scale = 1.):
-        self.filename = filename
-        self.labels   = labels
-        odata         = dp.godata_load(filename)
-        self.y        = odata.y
-        #self.y        = odata.y
-        self.id       = odata.id
+#     def __init__(self, filename, labels, black = False, img_scale = 1.):
+#         self.filename = filename
+#         self.labels   = labels
+#         odata         = dp.godata_load(filename)
+#         self.y        = odata.y
+#         #self.y        = odata.y
+#         self.id       = odata.id
 
-        ok = [(label in odata.xdic.keys()) for label in labels]
-        ok = (np.sum(ok) == len(ok))
-        xdic = odata.xdic if ok else odata.zdic
-        self.x     = _xs(xdic, labels)
+#         ok = [(label in odata.xdic.keys()) for label in labels]
+#         ok = (np.sum(ok) == len(ok))
+#         xdic = odata.xdic if ok else odata.zdic
+#         self.x     = _xs(xdic, labels)
         
-        # creata a digital (white and black only image)
-        self.black = black
-        if (black):
-            print('black data ')
-            self.x[self.x > 0] = 1 
+#         # creata a digital (white and black only image)
+#         self.black = black
+#         if (black):
+#             print('black data ')
+#             self.x[self.x > 0] = 1 
 
-        self.factor = img_scale
-        self.x     = img_scale * self.x
-        if (img_scale != 1.):
-            print('scale image by factor ', img_scale)
+#         self.factor = img_scale
+#         self.x     = img_scale * self.x
+#         if (img_scale != 1.):
+#             print('scale image by factor ', img_scale)
         
-    def filter(self, mask):
-        self.x   = self.x [mask]
-        self.y   = self.y [mask]
-        self.id  = self.id[mask]
-        self.mask = self.mask
+#     def filter(self, mask):
+#         self.x   = self.x [mask]
+#         self.y   = self.y [mask]
+#         self.id  = self.id[mask]
+#         self.mask = self.mask
 
-    def __str__(self):
-        s  = 'Dataset : \n'
-        s += '   labels   : ' + str(self.labels)   + '\n'
-        s += '   x shape  : ' + str(self.x.shape) + '\n'
-        s += '   y shape  : ' + str(self.y.shape) + '\n'
-        s += '   black    : ' + str(self.black) + '\n'
-        s += '   scale    : ' + str(self.factor)
-        return s
+#     def __str__(self):
+#         s  = 'Dataset : \n'
+#         s += '   labels   : ' + str(self.labels)   + '\n'
+#         s += '   x shape  : ' + str(self.x.shape) + '\n'
+#         s += '   y shape  : ' + str(self.y.shape) + '\n'
+#         s += '   black    : ' + str(self.black) + '\n'
+#         s += '   scale    : ' + str(self.factor)
+#         return s
 
-    def __len__(self):
-        return len(self.y)
+#     def __len__(self):
+#         return len(self.y)
 
-    def __getitem__(self, idx):
-        xi = self.x[idx]
-        yi = int(self.y[idx])
-        xi = torch.tensor(xi, dtype = torch.float) # Add channel dimension
-        # if (len(self.labels) == 1): xi.unsqueeze(0) #TODO
-        yi = torch.tensor(yi)
-        return xi, yi
+#     def __getitem__(self, idx):
+#         xi = self.x[idx]
+#         yi = int(self.y[idx])
+#         xi = torch.tensor(xi, dtype = torch.float) # Add channel dimension
+#         # if (len(self.labels) == 1): xi.unsqueeze(0) #TODO
+#         yi = torch.tensor(yi)
+#         return xi, yi
 
 #----- PyTorch data operations
 
@@ -681,18 +681,19 @@ def filename_cnn(ifilename, config):
     ofile   = ut.str_concatenate((fname, sname)) +  '.npz'
     return ofile
 
-def production(ifile, ofile, config):
+def production(root, ofile, config):
     
-    print('input file  : ', ifile)
+    print('root        : ', root)
     print('output file : ', ofile)
     print('config      : ', config)
 
-    labels    = config['labels']
-    black     = config['black']
-    img_scale = config['img_scale']
-    print('loading data ', ifile)
-    idata  = GoDataset(ifile, labels, black = black, img_scale = img_scale)
-    print('Input shape ', idata.x.shape)
+    label  = config['label']
+    width  = config['width']
+    frame  = config['frame']
+
+    evtdis = dp.EvtDispatch(root)
+    imgdis = dp.ImgDispach(evtdis, label, width, frame)
+    idata  = ImgDataset(imgdis)
  
     expansion = config['expansion']
     nepochs   = config['nepochs']
@@ -700,11 +701,14 @@ def production(ifile, ofile, config):
     CNN       = HCNN if cnnname == 'HCNN' else HKCNN if cnnname == 'HKCNN' else KCNN
     padding   = 0    if cnnname == 'HCNN' else 1
 
-    _, depth, width, _ = idata.x.shape
+    x, _ = imgdis[0]
+
+    color, width, _ = x.shape
+    print('Input shape (C, W, H) ', color, width, width)
     print('CNN model ', cnnname)
     kernel = 3
     print('configurate cnn (kernel, expansion, padding)', kernel, expansion, padding)
-    kcnn = CNN(depth, width, expansion = expansion, kernel = kernel, padding = padding)
+    kcnn = CNN(color, width, expansion = expansion, kernel = kernel, padding = padding)
     print('run cnn (epochs) ', nepochs)
     rcnn = run(idata, kcnn, ofilename = ofile, nepochs = nepochs, config = config)
     return rcnn 

@@ -4,17 +4,14 @@ import os
 import argparse
 
 path  = os.environ["LPRDATADIR"]
-ipath = path+'shots/'
 opath = path+'CNN/'
 
 pressure  = '5bar'
-hit_width =  2
-sigma     =  2
-width     = 10
+width     =  2.5
+frame     = 150
 
-def _hname():
-    ss = pressure+'_h' +str(hit_width)+'s'+str(sigma)+'w'+str(width)
-    return ss
+
+root = path + 'cvoxels/'+pressure+'_bunch*.h5'
 
 cnnname   = 'HCNN'
 labels    = ['xy_E_sum', 'yz_E_sum', 'zx_E_sum']
@@ -27,12 +24,12 @@ parser = argparse.ArgumentParser(description='cnn')
 
 parser.add_argument('-cnnname', type = str, help = 'name of the cnn', default = cnnname)
 
-parser.add_argument('-labels', metavar = 'N', type = str, nargs='+',
+parser.add_argument('-label', metavar = 'N', type = str, nargs='+',
                     help = "list of images, i.e 'xy_E_sum' ", default= labels)
 
-parser.add_argument('-black', type = bool, help = 'digitial image ', default = False)
+parser.add_argument('-width', type = float, help = 'image pixel width ', default = 10.)
 
-parser.add_argument('-img_scale', type = float, help = 'image scale factor ', default = 1.)
+parser.add_argument('-frame', type = float, help = 'image scale factor ', default = 100.)
 
 parser.add_argument('-expansion', type = int, help = "sigma - normal diffusion ", default = expansion)
 
@@ -50,9 +47,9 @@ print('path : ', path)
 print('args : ', args)
 
 config                   = cnn.config
-config['labels']         = args.labels
-config['black']          = args.black
-config['img_scale']      = args.img_scale
+config['label']          = args.label
+config['width']          = args.width
+config['frame']          = args.frame
 
 config['cnnname']        = args.cnnname
 config['expansion']      = args.expansion
@@ -60,8 +57,8 @@ config['loss_function']  = args.eloss
 config['learning_rate']  = args.lrate
 config['nepochs']        = args.nepochs
 
-ifile  = dp.filename_godata(pressure, 'shuffle', hit_width, sigma, width)
-ofile  = cnn.filename_cnn(_hname(), config)
 
-_ = cnn.production(ipath + ifile, opath + ofile, config)
+ofile = pressure + '_imgW'+str(int(width))+'F'+str(int(frame))+'.npz'
+
+_ = cnn.production(root, opath + ofile, config)
 print('Done!')
