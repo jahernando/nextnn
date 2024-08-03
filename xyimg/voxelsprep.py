@@ -159,7 +159,7 @@ def run(ifilename,
         return ibunch
 
     def _concat(kdf, kevt, k):
-        kdf = pd.concat((kdf, kevt)) if k == 0 else kevt
+        kdf = pd.concat((kdf, kevt)) if k > 0 else kevt
         k  += 1
         return kdf, k
 

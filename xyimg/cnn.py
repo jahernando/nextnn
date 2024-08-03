@@ -1,4 +1,5 @@
 import random            as random
+import glob              as glob
 import numpy             as np
 import pandas            as pd
 
@@ -20,6 +21,55 @@ import xyimg.dataprep as dp
 
 from collections import namedtuple
 CNNResult = namedtuple('CNNResult' , ['model', 'dataset', 'losses', 'accuracies', 'index', 'y', 'yp'])
+
+#-------------------
+# Shot Dataset
+#-------------------
+
+def _nevents_in_file(dfile, label = 'idx'):
+    return len(dfile[label].unique())
+
+def _get_evt(dfile, idx, label = 'idx'):
+    return dfile[dfile[label] == idx]
+
+class EvtDispatch:
+    """ Dispatches events using the 'idx' index in the DF.
+    It computes the total number of events in the *root* files.
+    Files are expected to have the same number of events except the last one.
+    The 'idx' index should be in increasing order in the files
+    Root should have '*' in it and the '*' should be an integer in order of the files, that, is with 3 files '*' can be [0, 1, 2]
+    """
+
+    def __init__(self, root):
+        self.root          = root
+        files              = glob.glob(root)
+        nbunches           = len(files)
+        nevents_last_bunch = _nevents_in_file(self._set_file(nbunches - 1))
+        nevents_bunch      = _nevents_in_file(self._set_file(0))
+        self.nevents = (nbunches-1) * nevents_bunch + nevents_last_bunch
+        self.bins = np.linspace(0, self.nevents, nevents_bunch, endpoint = True, dtype = int)
+        return
+
+    def _set_file(self, ifile):
+        print('setting file ', ifile)
+        self._ifile = ifile
+        self._file  = pd.read_hdf(self.root.replace('*', str(ifile)), 'voxels')
+        return self._file
+
+
+    def _set_ifile_by_index(self, index):
+        ibin = np.digitize(index, self.bins) - 1 
+        print(ibin)
+        if (self._ifile != ibin): self._set_file(ibin)
+        return ibin
+
+    def __len__(self):
+        return self.nevents
+
+    def __getitem__(self, index):
+        self._set_ifile_by_index(index)
+        kevt   = _get_evt(self._file, index)
+        return kevt
 
 
 #-------------------
