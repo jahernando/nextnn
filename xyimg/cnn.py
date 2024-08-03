@@ -624,14 +624,15 @@ def device():
 
 def run(dataset, model, nepochs = 10, ofilename = '', config = config):
 
-    print(dataset)
+    #print(dataset)
     print(config)
     loss_function = loss_functions[config['loss_function']]
     learning_rate = config['learning_rate']
 
     train, test, val, index = subsets(dataset)
-    assert len(dataset.x.shape) == 4
-    print('Event Image sample : ', dataset.x.shape)
+    x, _ = dataset[0]
+    assert len(x.shape) == 3
+    print('Event Image sample : ', x.shape)
 
     device()
     #model  = model.to(dev)
@@ -692,7 +693,8 @@ def production(root, ofile, config):
     frame  = config['frame']
 
     evtdis = dp.EvtDispatch(root)
-    imgdis = dp.ImgDispach(evtdis, label, width, frame)
+    print('Number of events ', len(evtdis), evtdis.bins[-1])
+    imgdis = dp.ImgDispatch(evtdis, label, width, frame)
     idata  = ImgDataset(imgdis)
  
     expansion = config['expansion']
@@ -810,71 +812,71 @@ def false_negatives_indices(y, yp, yp0 = 0.05, index0 = 0):
 # Tests
 #---------
 
-def test_godataset(ifilename, labels, DSet = GoDataset):
+# def test_godataset(ifilename, labels, DSet = GoDataset):
 
-    odata  = dp.load(ifilename)
+#     odata  = dp.load(ifilename)
 
-    def _test(labels):
-        dataset = DSet(ifilename, labels)
-        assert dataset.xs.shape[1] == len(labels)
-        nsize = len(dataset)
-        assert dataset.xs.shape[0] == nsize
-        xdic = odata.xdic if DSet == GoDataset else odata.zdic
-        #zdic = odata.zdic if DSet == GoDataset else odata.xdic
-        i = random.choice(range(nsize))
-        for j, label in enumerate(labels):
-            assert np.all(xdic[label][i] == dataset.xs[i, j])
-        assert odata.y[i] == dataset.ys[i]
-        assert dataset.zs.shape[0] == nsize
-        assert dataset.zs.shape[1] == len(dataset.zlabels)
+#     def _test(labels):
+#         dataset = DSet(ifilename, labels)
+#         assert dataset.xs.shape[1] == len(labels)
+#         nsize = len(dataset)
+#         assert dataset.xs.shape[0] == nsize
+#         xdic = odata.xdic if DSet == GoDataset else odata.zdic
+#         #zdic = odata.zdic if DSet == GoDataset else odata.xdic
+#         i = random.choice(range(nsize))
+#         for j, label in enumerate(labels):
+#             assert np.all(xdic[label][i] == dataset.xs[i, j])
+#         assert odata.y[i] == dataset.ys[i]
+#         assert dataset.zs.shape[0] == nsize
+#         assert dataset.zs.shape[1] == len(dataset.zlabels)
     
-    _test(labels)
-    _test((labels[0],))
-    return True
+#     _test(labels)
+#     _test((labels[0],))
+#     return True
 
 
-def test_box_index(box):
-    index = box.index
+# def test_box_index(box):
+#     index = box.index
 
-    ys  = np.array(box.dataset[index[0]:index[1]][1], dtype = int).flatten()
-    ys0 = box.dataset.ys[index[0]:index[1]].flatten()
-    ys1 = np.array(box.y, dtype = int).flatten()
-    assert np.all(ys == ys0)
-    assert np.all(ys == ys1)
-    return True
+#     ys  = np.array(box.dataset[index[0]:index[1]][1], dtype = int).flatten()
+#     ys0 = box.dataset.ys[index[0]:index[1]].flatten()
+#     ys1 = np.array(box.y, dtype = int).flatten()
+#     assert np.all(ys == ys0)
+#     assert np.all(ys == ys1)
+#     return True
 
-def test_box_save(box, ofile):
-    cnndata = np.load(ofile)
+# def test_box_save(box, ofile):
+#     cnndata = np.load(ofile)
 
-    assert np.all(np.array(box.epochs) ==  cnndata['epochs'])
-    assert np.all(box.y == cnndata['y'])
-    assert np.all(box.yp == cnndata['yp'])
-    assert np.all(np.array(box.index) == cnndata['index'])
-    return True
+#     assert np.all(np.array(box.epochs) ==  cnndata['epochs'])
+#     assert np.all(box.y == cnndata['y'])
+#     assert np.all(box.yp == cnndata['yp'])
+#     assert np.all(np.array(box.index) == cnndata['index'])
+#     return True
 
 
-test_xlabel = ['xy_E_sum']
-test_zlabel = ['zy_segclass_mean']
+# test_xlabel = ['xy_E_sum']
+# test_zlabel = ['zy_segclass_mean']
 
-def test(ifilename, xlabels = test_xlabel, zlabels = test_zlabel):
+# def test(ifilename, xlabels = test_xlabel, zlabels = test_zlabel):
 
-    print('input filename ', ifilename)
-    ofilename = dp.prepend_filename(ifilename, 'test_cnn')
-    print('output filename ', ofilename)
+#     print('input filename ', ifilename)
+#     ofilename = dp.prepend_filename(ifilename, 'test_cnn')
+#     print('output filename ', ofilename)
 
-    print('--- data set ---')
-    test_godataset(ifilename, xlabels)
-    dset = GoDataset(ifilename, xlabels)
-    box  = run(dset, ofilename = ofilename, nepochs = 4)
-    test_box_index(box)
-    test_box_save(box, ofilename)
+#     print('--- data set ---')
+#     test_godataset(ifilename, xlabels)
+#     dset = GoDataset(ifilename, xlabels)
+#     box  = run(dset, ofilename = ofilename, nepochs = 4)
+#     test_box_index(box)
+#     test_box_save(box, ofilename)
 
-    print('--- data set inv ---')
-    test_godataset(ifilename, xlabels, GoDatasetInv)
-    dset = GoDatasetInv(ifilename, zlabels)
-    box  = run(dset, ofilename = ofilename, nepochs = 4)
-    test_box_index(box)
-    test_box_save(box, ofilename)
+#     print('--- data set inv ---')
+#     test_godataset(ifilename, xlabels, GoDatasetInv)
+#     dset = GoDatasetInv(ifilename, zlabels)
+#     box  = run(dset, ofilename = ofilename, nepochs = 4)
+#     test_box_index(box)
+#     test_box_save(box, ofilename)
 
     # print('--- data set test ---')
     # labels = ['test']

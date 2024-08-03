@@ -51,13 +51,13 @@ class EvtDispatch:
         nevents_last_bunch = _nevents_in_file(self._set_file(nbunches - 1))
         nevents_bunch      = _nevents_in_file(self._set_file(0))
         self.nevents = (nbunches-1) * nevents_bunch + nevents_last_bunch
-        self.bins = np.arange(0, self.nevents + nevents_last_bunch, nevents_bunch, dtype = int)
+        self.bins = np.arange(0, self.nevents + nevents_bunch, nevents_bunch, dtype = int)
         assert len(self.bins) == nbunches + 1
         #self.bins = np.linspace(0, self.nevents, nbunches, endpoint = True, dtype = int)
         return
 
     def _set_file(self, ifile):
-        print('setting file ', ifile)
+        #print('setting file ', ifile)
         self._ifile = ifile
         self._file  = pd.read_hdf(self.root.replace('*', str(ifile)), 'voxels')
         return self._file
@@ -65,7 +65,7 @@ class EvtDispatch:
 
     def _set_ifile_by_index(self, index):
         ibin = np.digitize(index, self.bins) - 1 
-        print(ibin)
+        #print(ibin)
         if (self._ifile != ibin): self._set_file(ibin)
         return ibin
 
@@ -73,10 +73,13 @@ class EvtDispatch:
         return self.nevents
 
     def __getitem__(self, index):
+        if index >= self.nevents:
+            raise IndexError('Evtdispatch exceeded index '+str(index))
         self._set_ifile_by_index(index)
         kevt   = _get_evt(self._file, index)
+        if len(kevt) <= 0: 
+            raise IndexError('EvtDispatch empty event with index '+str(index))
         return kevt
-
 
 #-----------
 #  Image Dispatch
@@ -116,7 +119,7 @@ def evt_image(df    : pd.DataFrame,
     return x
 
 
-class ImgDispach():
+class ImgDispatch():
 
     def __init__(self, evtdispatch, label, width, frame):
         self.evtdispatch = evtdispatch
