@@ -28,9 +28,12 @@ args = parser.parse_args()
 print('path : ', path)
 print('args : ', args)
 
+pressure = args.pressure
 bkgfile = path + vp.filename_voxel(pressure, '1eroi')
 sigfile = path + vp.filename_voxel(pressure, '0nubb') 
+ofile   = opath+pressure+'.h5'
 
-ofile       = opath+pressure+'.h5'
+print('ifiles ', bkgfile, sigfile)
+print('ofile  ', ofile)
 
 vp.run([bkgfile, sigfile], ofile, nbunch = args.nbunch, nevents = args.nevents, shuffle = True)

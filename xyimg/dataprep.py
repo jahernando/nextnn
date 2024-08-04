@@ -29,12 +29,32 @@ frames = {'20bar': 67, '13bar' : 100, '5bar' : 304, '2bar' : 587, '1bar' : 593}
 #  Event Dispatch
 #-----------
 
-def _nevents_in_file(dfile, label = 'idx'):
+def _df_nevents_in_file(dfile, label = 'idx'):
     return len(dfile[label].unique())
 
-def _get_evt(dfile, idx, label = 'idx'):
-    return dfile[dfile[label] == idx]
+def _df_generator(filename, key = 'voxels', label = 'idx'):
+    df  = pd.read_hdf(filename, key)
+    #label = [label,] if type(label) != list else label
+    gdf = df.groupby(label)
+    return gdf
 
+def evt_generator(root, key = 'voxels', label = 'idx'):
+    files      = glob.glob(root)
+    nbunches   = len(files)
+    print('number of files ', nbunches)
+    def _giter(ifile):
+        fname = root.replace('*', str(ifile)) if nbunches > 1 else files[0]
+        gen = _df_generator(fname, key, label)
+        return iter(gen)
+    ifile  = 0
+    giter  = _giter(ifile)
+    while ifile < nbunches:
+        try:
+            yield next(giter)
+        except StopIteration:
+            ifile += 1
+            if (ifile < nbunches): giter = _giter(ifile)
+     
 class EvtDispatch:
     """ Dispatches events using the 'idx' index in the DF.
     It computes the total number of events in the *root* files.
@@ -44,24 +64,35 @@ class EvtDispatch:
     """
 
     def __init__(self, root):
-        self.root          = root
-        files              = glob.glob(root)
-        nbunches           = len(files)
+        self.root     = root
+        files         = glob.glob(root)
+        nbunches      = len(files)
+        self.nbunches = nbunches
         print('number of files ', nbunches)
-        nevents_last_bunch = _nevents_in_file(self._set_file(nbunches - 1))
-        nevents_bunch      = _nevents_in_file(self._set_file(0))
-        self.nevents = (nbunches-1) * nevents_bunch + nevents_last_bunch
-        self.bins = np.arange(0, self.nevents + nevents_bunch, nevents_bunch, dtype = int)
+        if (nbunches == 1):
+            self._set_file(0, files[0])
+            self.nevents = _df_nevents_in_file(self._file)
+            self.nevents_batch = self.nevents
+        else:
+            nevents_last_bunch = _df_nevents_in_file(self._set_file(nbunches-1))
+            nevents_bunch      = _df_nevents_in_file(self._set_file(0))
+            self.nevents = (nbunches-1) * nevents_bunch + nevents_last_bunch
+        bins = list(range(0, self.nevents, nevents_bunch))
+        if (bins[-1] < self.nevents): bins.append(self.nevents)
+        self.bins = np.array(bins, dtype = int)
+        print('events ', self.nevents)
+        print('range  ', self.bins[0], self.bins[-1], ', nbins ', len(self.bins))
         assert len(self.bins) == nbunches + 1
         #self.bins = np.linspace(0, self.nevents, nbunches, endpoint = True, dtype = int)
         return
 
-    def _set_file(self, ifile):
-        #print('setting file ', ifile)
+    def _set_file(self, ifile, fname = ''):
+        if (ifile < 0) or (ifile >= self.nbunches):
+            raise IndexError('EventDispatch not valid index file '+str(ifile))
         self._ifile = ifile
-        self._file  = pd.read_hdf(self.root.replace('*', str(ifile)), 'voxels')
+        fname = self.root.replace('*', str(ifile)) if fname == '' else fname
+        self._file  = _df_generator(fname, 'voxels', 'idx')
         return self._file
-
 
     def _set_ifile_by_index(self, index):
         ibin = np.digitize(index, self.bins) - 1 
@@ -73,10 +104,10 @@ class EvtDispatch:
         return self.nevents
 
     def __getitem__(self, index):
-        if index >= self.nevents:
-            raise IndexError('Evtdispatch exceeded index '+str(index))
+        if (index >= self.nevents) or (index < 0):
+            raise IndexError('Evtdispatch not valid index '+str(index))
         self._set_ifile_by_index(index)
-        kevt   = _get_evt(self._file, index)
+        kevt   = self._file.get_group(index)
         if len(kevt) <= 0: 
             raise IndexError('EvtDispatch empty event with index '+str(index))
         return kevt

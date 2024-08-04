@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --qos=regular
-#SBATCH --job-name=0803_vp_13b
-#SBATCH --output=0803_vp_13b.out
-#SBATCH --error=0803_vp_13b.err
+#SBATCH --job-name=0804_vp_2b
+#SBATCH --output=0804_vp_2b.out
+#SBATCH --error=0804_vp_2b.err
 
 #SBATCH --cpus-per-task=1
 # #SBATCH --gres=gpu:rtx3090:1
@@ -20,4 +20,4 @@ source /home/jahernando/scripts/setup.sh
 cd /home/jahernando/NEXT/software/nextnn
 source setup.sh
 
-srun python xyimg/voxelsprod.py -pressure 13bar -nbunch 10000 -nevents -1
+srun python xyimg/voxelsprod.py -pressure 2bar -nbunch 5000 -nevents -1
