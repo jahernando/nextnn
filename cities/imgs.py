@@ -30,6 +30,11 @@ args = parser.parse_args()
 
 #--- Run
 
+pressure = args.pressure
+label    = args.label
+width    = args.width
+frame    = args.frame
+
 print('args : ', args)
 
 root   = ipath+pressure+'_bunch*.h5'
@@ -51,8 +56,8 @@ evtgen = dp.evt_generator(root)
 t0 = time.time()
 imgs = [oper(evt[1]) for evt in evtgen]
 
-xs = [x[0] for x in imgs]
-ys = [x[1] for x in imgs]
+xs = np.array([x[0] for x in imgs])
+ys = np.array([x[1] for x in imgs])
 t1 = time.time()
 
 np.savez_compressed(ofile, x = xs, y = ys)
