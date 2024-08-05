@@ -92,6 +92,7 @@ class EvtDispatch:
         self._ifile = ifile
         fname = self.root.replace('*', str(ifile)) if fname == '' else fname
         self._file  = _df_generator(fname, 'voxels', 'idx')
+        # self._file = pd.read_hdf(fname, 'voxels') # if using the index, not efficient!
         return self._file
 
     def _set_ifile_by_index(self, index):
@@ -108,6 +109,7 @@ class EvtDispatch:
             raise IndexError('Evtdispatch not valid index '+str(index))
         self._set_ifile_by_index(index)
         kevt   = self._file.get_group(index)
+        # kevt = self._file[self._file['idx'] == index] # using the index, not efficient!
         if len(kevt) <= 0: 
             raise IndexError('EvtDispatch empty event with index '+str(index))
         return kevt
@@ -117,6 +119,10 @@ class EvtDispatch:
 #-----------
 
 coor_labels = ('x', 'y', 'z')
+
+def get_bins(width, frame):
+     bins = [np.arange(-frame - w, frame + w, w) for w in (width, width, width)]
+     return bins
 
 def evt_image(df    : pd.DataFrame, 
               label : list[str],
