@@ -57,6 +57,6 @@ t1 = time.time()
 
 np.savez_compressed(ofile, x = xs, y = ys)
 
-print(f"time {t1 - t0} s")
+print(f"time per img : {(t1 - t0)/len(ys)} s")
 print("done!")
 
