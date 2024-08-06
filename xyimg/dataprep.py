@@ -156,7 +156,7 @@ def evt_image(df    : pd.DataFrame,
     return x
 
 
-class ImgDispatch():
+class ImgDispatchEvent():
 
     def __init__(self, evtdispatch, label, width, frame):
         self.evtdispatch = evtdispatch
@@ -173,6 +173,29 @@ class ImgDispatch():
         y   = int(evt['binclass'].unique())
         return x, y
 
+
+class ImgDispatchNP():
+
+    def __init__(self, filename):
+        self.file = np.load(filename)
+        self.x     = self.file['x']
+        self.y     = self.file['y']
+        self.label = self.file['label']
+        assert self.file['y'].shape[0] == self.file['x'].shape[0]
+        print('Images from : ', filename)
+        print('Image  shape ', self.x.shape)
+        print('Target shape ', self.y.shape)
+        print('Image  label ', self.label)
+        return
+
+    def __len__(self):
+        return len(self.y)
+        #return self.file['y'].shape[0]
+
+    def __getitem__(self, index):
+        return self.x[index], self.y[index]
+        return self.file['x'][index], self.file['y'][index]
+
 def plot_img(x, y, label):
 
     print('target ', y)
@@ -182,6 +205,43 @@ def plot_img(x, y, label):
     plt.tight_layout()
 
     return
+
+def plot_ana_img(xs, ys, label):
+
+    size = len(label)
+    for i in range(size):
+        print(label[i])
+        _plot_ana_img(xs[:, i], ys)
+    return 
+
+
+def _plot_ana_img(xs, ys):
+    plt.figure()
+    xlabel = ['sum', 'len', 'max', 'std']
+    for i, _sta in enumerate((np.sum, len, np.mean, np.std)):
+        plt.subplot(2, 2, i+1)
+        for iy in (0, 1):
+            var = [_sta(xi[xi != 0].flatten()) for xi, yi in zip(xs, ys) if yi == iy]
+            plt.hist(var, 100, density = True, label = str(iy), alpha = 0.5)
+            print(xlabel[i], np.mean(var), np.std(var))
+            plt.xlabel(xlabel[i])
+        plt.legend()
+    plt.tight_layout()
+
+    plt.figure()
+    xlabel = ('i-mean', 'j-mean')
+    for i in range(2):
+        plt.subplot(2, 2, i+1)
+        for iy in (0, 1):
+            var = [float(np.mean(np.argwhere(xi != 0), axis = 0)[i]) for xi, yi in zip(xs, ys) if (yi == iy)]
+            print(xlabel[i], np.mean(var), np.std(var))
+            plt.hist(var, 100, label = str(iy), alpha = 0.5)
+        plt.legend()
+        plt.xlabel(xlabel[i])
+    plt.tight_layout()
+
+    return
+
 
 
 # #--------------

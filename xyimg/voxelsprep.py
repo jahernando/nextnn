@@ -117,10 +117,10 @@ def test_evt_preparation(evt, track_id = track_id):
     assert np.all(np.isclose(xs, 0.))
 
     segs = evt.segclass.unique()
-    for i in (1, 2, 3): assert (i in segs)
+    assert np.all(segs >= 1) and np.all(segs <= 3)
     
     ext  = evt.ext.unique()
-    for i in (1, 2, 3): assert (i in ext)
+    assert np.all(ext >= 1) and np.all(ext <= 3)
 
     return True
 
