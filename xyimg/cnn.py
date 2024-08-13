@@ -641,7 +641,7 @@ def run(dataset, model, nepochs = 10, ofilename = '', config = config):
     ok =  torch.cuda.is_available()
     print(f"Is CUDA avialable? {ok} ")
 
-    optimizer = optim.Adam(model.parameters(), lr = learning_rate)
+    optimizer     = optim.Adam(model.parameters(), lr = learning_rate)
     losses, accus = train_model(model, optimizer, train, val, loss_function, nepochs = nepochs)
     ys, yps       = prediction(model, test)
 
